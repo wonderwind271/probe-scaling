@@ -12,7 +12,9 @@ Probe model's scaling behavior and baseline
 
 ## Formula
 ### Fine-tuning Objective
+
 In order to make the model **unable** to tell $x^{+}$ and $x^{-}$ apart at layer $L$, we use
+
 $$
 \mathcal{L}
 =
@@ -36,4 +38,5 @@ p_{\theta_0}(\cdot \mid x)
 \,
 \|\Delta\|_2^{2}
 $$
+
 As the training objective. $k_0\leq L$ but not necessarily equal, because otherwise we are forcing the model to abruptly unlearn a feature at a certain layer. We also apply KL penalty and regularization term $\lambda_{\Delta}\,\|\Delta\|_2^{2}$ ($\Delta$ is the added part of the model, similar to LoRA but we do not use low rank approximation).
