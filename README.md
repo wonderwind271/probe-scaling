@@ -16,8 +16,7 @@ Probe model's scaling behavior and baseline
 In order to make the model **unable** to tell $x^{+}$ and $x^{-}$ apart at layer $L$, we use
 
 $$
-\mathcal{L}
-=
+\mathcal{L} =
 \lambda_{\mathrm{conf}}
 \sum_{k = k_0}^{L}
 w_k
