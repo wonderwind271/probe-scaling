@@ -20,15 +20,14 @@ $$
 \lambda_{\mathrm{conf}}
 \sum_{k = k_0}^{L}
 w_k
-
 \bigl\|
 h^{k}(x^{+}) - h^{k}(x^{-})
 \bigr\|_2^{2}
 +
 \lambda_{\mathrm{KL}}
-\mathrm{KL}\!\left(
+\mathrm{KL}\left(
 p_{\theta}(\cdot \mid x)
-\middle\|
+||
 p_{\theta_0}(\cdot \mid x)
 \right)
 +
