@@ -2,6 +2,7 @@ from probe_model import FrozenBackboneLayerwiseProber, MLP  # make sure MLP is a
 from datasets import load_dataset, concatenate_datasets
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -43,6 +44,7 @@ backbone = GPT2LMHeadModel.from_pretrained(model_path)
 d = backbone.config.n_embd
 
 probes = {i: MLP(d, d, 2) for i in range(backbone.config.n_layer + 1)}
+linear_probes = {i: nn.Linear(d, 2) for i in range(backbone.config.n_layer + 1)}
 
 model = FrozenBackboneLayerwiseProber(
     backbone=backbone,
