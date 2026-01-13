@@ -2,7 +2,7 @@ from typing import Dict, Optional, Literal, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import GPT2LMHeadModel
+from transformers import GPT2LMHeadModel, AutoModelForCausalLM
 
 
 PoolType = Literal["last_token", "mean"]
@@ -75,12 +75,17 @@ class FrozenBackboneLayerwiseProber(nn.Module):
         # Run backbone (usually no_grad to save memory)
         ctx = torch.no_grad() if self.backbone_no_grad else torch.enable_grad()
         with ctx:
-            outputs = self.backbone.transformer(
+            backbone_core = getattr(self.backbone, "model", None)  # LLaMAForCausalLM etc.
+            if backbone_core is None:
+                backbone_core = getattr(self.backbone, "transformer", None)  # GPT2LMHeadModel
+            if backbone_core is None:
+                backbone_core = self.backbone  # already a base model (e.g., LlamaModel)
+
+            outputs = backbone_core(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 output_hidden_states=True,
                 return_dict=True,
-                **kwargs,
             )
             hidden_states = outputs.hidden_states  # tuple (n_layers+1), each (B,T,D)
 
