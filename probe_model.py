@@ -18,6 +18,17 @@ class MLP(nn.Module):
         x = self.fc2(x)
         return x
 
+class MultiLinear(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        x =self.fc1(x)
+        x = self.fc2(x)
+        return x
+
 
 def masked_mean(x, mask):
     mask = mask.to(dtype=x.dtype)
@@ -93,6 +104,7 @@ class FrozenBackboneLayerwiseProber(nn.Module):
         for layer_idx in self.attached_layers():
             h = hidden_states[layer_idx]  # (B,T,D)
             feat = pool_hidden(h, attention_mask, self.pooling)  # (B,D)
+            feat = feat.float()
             logits_by_layer[layer_idx] = self.probes[f"layer_{layer_idx}"](feat)
 
         loss = None

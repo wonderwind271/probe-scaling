@@ -133,7 +133,7 @@ def evaluate(model, data_loader, device):
 # -------------------------
 # Training loop
 # -------------------------
-num_epochs = 10
+num_epochs = 5
 
 for epoch in range(num_epochs):
     model.train()

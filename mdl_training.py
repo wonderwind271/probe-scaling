@@ -1,6 +1,6 @@
 from mdl_utils import split_dataset  # and geometric_splits already in mdl_utils
 
-from probe_model import FrozenBackboneLayerwiseProber, MLP
+from probe_model import FrozenBackboneLayerwiseProber, MLP, MultiLinear
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from datasets import load_dataset, concatenate_datasets
-from transformers import GPT2TokenizerFast, GPT2LMHeadModel
+from transformers import GPT2TokenizerFast, GPT2LMHeadModel, AutoTokenizer, AutoModelForCausalLM
 
 
 # -------------------------
@@ -25,9 +25,9 @@ else:
 # -------------------------
 # Tokenizer
 # -------------------------
-model_path = "gpt2"
+model_path = "meta-llama/Meta-Llama-3.1-8B"
 
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained(model_path)
 tokenizer.pad_token = tokenizer.eos_token
 
 def tokenize_fn(batch):
@@ -47,13 +47,22 @@ def build_layerwise_probe_model(backbone, probe_type="mlp"):
     Returns a fresh FrozenBackboneLayerwiseProber with new probe params.
     probe_type: "mlp" or "linear"
     """
-    d = backbone.config.n_embd
-    n_layers = backbone.config.n_layer
+    if hasattr(backbone.config, 'n_embd'):
+        d = backbone.config.n_embd
+    else:
+        d = backbone.config.hidden_size
+
+    if hasattr(backbone.config, 'n_layer'):
+        n_layers = backbone.config.n_layer
+    else:
+        n_layers = backbone.config.num_hidden_layers
 
     if probe_type == "mlp":
-        probes = {i: MLP(d, d, 2) for i in range(n_layers + 1)}
+        probes = {i: MLP(d, int(d/8), 2) for i in range(n_layers + 1)}
     elif probe_type == "linear":
         probes = {i: nn.Linear(d, 2) for i in range(n_layers + 1)}
+    elif probe_type == "multilinear":
+        probes = {i: MultiLinear(d, int(d/4), 2) for i in range(n_layers + 1)}
     else:
         raise ValueError(f"Unknown probe_type: {probe_type}")
 
@@ -78,20 +87,24 @@ def summed_ce_by_layer(model, data_loader, device):
     model.eval()
     ce_sum_by_layer = {layer: 0.0 for layer in model.attached_layers()}
     n_examples = 0
-
+    print_state = 1
     for batch in data_loader:
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
         labels = batch["label"].to(device)  # (B,)
 
         out = model(input_ids=input_ids, attention_mask=attention_mask, labels=None)
+        # if print_state == 1:
+        #     print(input_ids,attention_mask)
+        #     print_state = 0
         logits_by_layer = out["logits_by_layer"]  # dict[layer -> (B,2)]
 
         B = labels.size(0)
         n_examples += B
-
+        
         for layer, logits in logits_by_layer.items():
             # sum reduction => total code length contribution for this layer over the batch
+            
             loss_sum = F.cross_entropy(logits, labels, reduction="sum")
             ce_sum_by_layer[layer] += float(loss_sum.item())
 
@@ -106,7 +119,7 @@ def train_probe(model, train_loader, device, num_epochs=5, lr=1e-3):
     model.train()
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-
+    # print_state = 1
     for epoch in range(num_epochs):
         total_loss = 0.0
         pbar = tqdm(train_loader, desc=f"  Train epoch {epoch+1}/{num_epochs}", leave=False)
@@ -117,6 +130,10 @@ def train_probe(model, train_loader, device, num_epochs=5, lr=1e-3):
             labels = batch["label"].to(device)
 
             out = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            # if print_state == 1:
+            #     print(out)
+            #     print_state = 0
+
             loss = out["loss"]
 
             loss.backward()
@@ -153,12 +170,12 @@ for i, d in enumerate(splits):
 # Online MDL loop
 # -------------------------
 batch_size = 16
-probe_type = "mlp"      # or "linear"
-train_epochs = 5
+probe_type = "mlp"      # "mlp", "linear"
+train_epochs = 1
 lr = 1e-3
 
 # Load backbone once (frozen)
-backbone = GPT2LMHeadModel.from_pretrained(model_path)
+backbone = AutoModelForCausalLM.from_pretrained(model_path, device_map="cuda",torch_dtype=torch.float16)
 backbone = backbone.to(device)
 backbone.eval()
 for p in backbone.parameters():
