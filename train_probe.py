@@ -1,4 +1,4 @@
-from probe_model import FrozenBackboneLayerwiseProber, MLP  # make sure MLP is available here
+from probe_model import FrozenBackboneLayerwiseProber, MLP, ThreeLayerMLP  # make sure MLP is available here
 from datasets import load_dataset, concatenate_datasets
 
 import torch
@@ -23,7 +23,7 @@ else:
 # -------------------------
 # Tokenizer (define before tokenize_fn)
 # -------------------------
-model_path = 'gpt2_delta_scrub_L2-4/merged_full'
+model_path = 'gpt2'
 
 tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
 tokenizer.pad_token = tokenizer.eos_token
@@ -43,7 +43,7 @@ def tokenize_fn(batch):
 backbone = GPT2LMHeadModel.from_pretrained(model_path)
 d = backbone.config.n_embd
 
-probes = {i: MLP(d, d, 2) for i in range(backbone.config.n_layer + 1)}
+probes = {i: ThreeLayerMLP(d, d * 4, d, 2) for i in range(backbone.config.n_layer + 1)}
 linear_probes = {i: nn.Linear(d, 2) for i in range(backbone.config.n_layer + 1)}
 
 model = FrozenBackboneLayerwiseProber(
