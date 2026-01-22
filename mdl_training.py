@@ -11,9 +11,11 @@ from datasets import load_dataset, concatenate_datasets
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from hydra.core.hydra_config import HydraConfig
 import logging
 import json
 from collections import defaultdict
+import os
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +27,19 @@ def tokenize_fn(batch, tokenizer):
         padding="max_length",
         max_length=128,
     )
+
+
+def flatten_data(batch):
+    '''Convert Seed42Lab/en-ud-test-pair into a unified format. clean: 1, corrupted: 0'''
+    texts = []
+    labels = []
+    for pos, neg in zip(batch['positive'], batch['negative']):
+        texts.append(pos)
+        labels.append(1)
+
+        texts.append(neg)
+        labels.append(0)
+    return {"text": texts, "label": labels}
 
 
 def build_layerwise_probe_model(backbone, probe_type="mlp",
@@ -130,9 +145,22 @@ def train_probe(model, train_loader, device, num_epochs=5, lr=1e-3):
     return model
 
 
-def evaluate_probe(test_set, cfg, model, device):
+def evaluate_probe(tokenizer, cfg, model, device):
     '''Evaluate probe accuracy per layer on test set'''
     logging.info("\n[Probe Evaluation on Test Set]")
+    test_set_orig = load_dataset(
+        cfg.dataset.test, split=cfg.dataset.test_split)
+
+    # clean: 1, corrupted: 0
+    test_set = test_set_orig.map(
+        flatten_data, batched=True,
+        remove_columns=['positive', 'negative']
+    ).shuffle()
+    test_set = test_set.map(tokenize_fn, batched=True, remove_columns=[
+                            "text"],  fn_kwargs={"tokenizer": tokenizer})
+    test_set.set_format(type="torch", columns=[
+                        "input_ids", "attention_mask", "label"])
+
     test_loader = DataLoader(
         test_set, batch_size=cfg.mdl.batch_size, shuffle=True)
 
@@ -170,23 +198,16 @@ def main(cfg: DictConfig):
     tokenizer = AutoTokenizer.from_pretrained(cfg.model)
     tokenizer.pad_token = tokenizer.eos_token
 
-    dataset = load_dataset(cfg.dataset, split='train')
+    dataset = load_dataset(cfg.dataset.train, split=cfg.dataset.train_split)
     dataset = dataset.map(tokenize_fn, batched=True, remove_columns=[
                           "text"],  fn_kwargs={"tokenizer": tokenizer})
     dataset.set_format(type="torch", columns=[
         "input_ids", "attention_mask", "label"])
-
-    # split into 80% training and 20% testing
-    split_datasets = dataset.train_test_split(test_size=0.2)
-    train_set = split_datasets["train"]
-    test_set = split_datasets["test"]
-    logging.info(
-        f'split into train / test: {len(train_set)} / {len(test_set)}')
-
     label_num = dataset.features["label"].num_classes
+    logging.info(f'dataset has {len(dataset)} examples, {label_num} classes')
 
     # split into geometric chunks (already shuffles inside if seed>=0)
-    splits = split_dataset(dataset=train_set, split_num=5,
+    splits = split_dataset(dataset=dataset, split_num=5,
                            ratio=2.0, seed=cfg.mdl.seed)
     for i, d in enumerate(splits):
         logging.debug(f"dataset D{i+1}: {len(d)}")
@@ -262,9 +283,10 @@ def main(cfg: DictConfig):
     logging.info(
         f"Avg over layers NLL: {(sum(mdl_sum_by_layer.values())/len(mdl_sum_by_layer)) / total_encoded_examples:.4f}")
 
-    acc_by_layer = evaluate_probe(test_set, cfg, model, device)
+    acc_by_layer = evaluate_probe(tokenizer, cfg, model, device)
 
-    with open('results.json', "w") as f:
+    output_dir = HydraConfig.get().runtime.output_dir
+    with open(os.path.join(output_dir, 'results.json'), "w") as f:
         json.dump({'mdl': mdl_sum_by_layer,
                    'acc': acc_by_layer,
                    'probe_size': list(layer_dim),

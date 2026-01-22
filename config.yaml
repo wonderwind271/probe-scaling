@@ -1,7 +1,11 @@
 model: "meta-llama/Meta-Llama-3.1-8B"
 model_short: 'llama'  # mainly for create output dir
 
-dataset: "Seed42Lab/en-ud-train"
+dataset: 
+  train: "Seed42Lab/en-ud-train"
+  train_split: 'train'
+  test: "Seed42Lab/en-ud-test-pair"
+  test_split: 'train'
 
 mdl:
   batch_size: 16
