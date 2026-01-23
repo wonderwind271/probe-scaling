@@ -161,11 +161,10 @@ def train_probe(model, train_loader, device, num_epochs=5, lr=1e-3):
 
 def train_probe_w_eval(model, train_loader, test_loader, device, num_epochs=5, lr=1e-3):
     model = model.to(device)
-    model.train()
-
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     final_ce_sum_by_layer = {}
     for epoch in range(num_epochs):
+        model.train()
         total_loss = 0.0
         pbar = tqdm(
             train_loader, desc=f"  Train epoch {epoch+1}/{num_epochs}", leave=False)
