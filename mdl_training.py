@@ -223,9 +223,9 @@ def main(cfg: DictConfig):
     # MDL accumulators per layer
     mdl_sum_by_layer = defaultdict(float)
     total_encoded_examples = 0
-
+    train_data = splits[0]
     # training dataset grows: D1, D1+D2, ...
-    for stage, (train_data, next_chunk) in enumerate(zip(splits, splits[1:])):
+    for stage, (_, next_chunk) in enumerate(zip(splits, splits[1:])):
         logging.info(f"\n[MDL] Stage {stage+1}/{len(splits)-1}")
         logging.info(f"  Train on:  D1...D{stage+1} (n={len(train_data)})")
         logging.info(f"  Encode on: D{stage+2}      (n={len(next_chunk)})")
