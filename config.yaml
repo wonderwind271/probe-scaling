@@ -1,0 +1,21 @@
+model: "meta-llama/Meta-Llama-3.1-8B"
+model_short: 'llama'  # mainly for create output dir
+
+dataset: 
+  train: "Seed42Lab/en-ud-train"
+  train_split: 'train'
+  test: "Seed42Lab/en-ud-test-pair"
+  test_split: 'train'
+
+mdl:
+  batch_size: 16
+  probe_type: "mlp"      # "mlp", "linear", "multilinear"
+  # probe_hidden_size: only save hidden size as a list, as the input and output sizes are inferred. Only valid for mlp and multilinear probes. 
+  probe_hidden_size: [128]
+  train_epochs: 2
+  lr: 1e-3
+  seed: 42
+
+hydra:
+  run:
+    dir: outputs/${model_short}/${mdl.probe_type}_${now:%m%d_%H%M%S}

@@ -2,6 +2,7 @@ import math
 from typing import List
 from datasets import Dataset, load_dataset
 
+
 def geometric_splits(N: int, split_num: int, ratio: float) -> List[int]:
     assert N > split_num, "N must be greater than split_num"
     assert ratio > 1.0, "ratio must be > 1"
@@ -53,4 +54,3 @@ def split_dataset(
         start = end
 
     return splits
-
