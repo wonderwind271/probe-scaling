@@ -16,11 +16,10 @@ Storage:
 ---
 Xiaoxi: add different tasks/datasets.
 - Somo: use the first 15k in training split.
-    dataset.name=compling/somo
-    model.max_length=256
-    dataset.task_name=somo
+    python cache_hidden_states.py dataset.name=compling/somo model.max_length=64
 
-- factuality: compling/factuality
+- factuality:
+    python cache_hidden_states.py dataset.name=compling/event_factuality dataset.split=train model.max_length=192 dataset.text_col=sentence
 """
 
 import os
@@ -42,18 +41,6 @@ log = logging.getLogger(__name__)
 
 def collate_text(batch: List[Dict], text_col) -> List[str]:
     return [ex[text_col] for ex in batch]
-
-
-def factuality_dataset(datapiece: dict, tokenizer):
-    '''Process one datapoint from factuality dataset to get verb token index'''
-    sentence = datapiece['sentence']
-    verb_id = datapiece['pred_token']
-    tokens = tokenizer(sentence, truncation=True, padding="max_length",
-                       max_length=128, return_tensors='pt')
-    word_id = tokens.word_ids()
-    # the maximum idx where word_id equals verb_id
-    verb_token_idx = max(
-        idx for idx, wid in enumerate(word_id) if wid == verb_id-1)
 
 
 def get_verb_token_index(batch_encoding, batch_idx, target_word_idx):
@@ -88,11 +75,31 @@ def load_hidden_states(dir_path: str):
     return hiddens, meta
 
 
+def build_out_dir(cfg):
+    '''parse cfg to build output directory'''
+    if cfg.dataset.name in ['Seed42Lab/en-ud-train', 'Seed42Lab/en-ud-test']:
+        task_name = 'verb_agreement'
+        if cfg.dataset.name == 'Seed42Lab/en-ud-test':
+            split = 'test'
+        else:
+            split = 'train'
+    elif cfg.dataset.name == 'compling/somo':
+        task_name = 'somo'
+        split = cfg.dataset.split
+    elif cfg.dataset.name == 'compling/event_factuality':
+        task_name = 'factuality'
+        split = cfg.dataset.split
+    else:
+        raise ValueError(f'Unknown dataset name: {cfg.dataset.name}')
+    out_dir = f'cache/{cfg.model.short}/{task_name}_{split}'
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir, task_name
+
+
 @hydra.main(version_base=None, config_path=".", config_name="config_cache_hidden")
 @torch.no_grad()
 def main(cfg: DictConfig):
-    out_dir = HydraConfig.get().runtime.output_dir
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir, task_name = build_out_dir(cfg)
 
     # 1) Load dataset
     ds = load_dataset(cfg.dataset.name, split=cfg.dataset.split)
@@ -100,7 +107,12 @@ def main(cfg: DictConfig):
         shuffled_ds = ds.shuffle(seed=42)
         ds = shuffled_ds.select(range(15000))
         logging.info(f"Subsetting Somo to 15k examples.")
+    if task_name == 'factuality':
+        columns_to_keep = ["sentence", "label", 'pred_token']
+        columns_to_remove = set(ds.column_names) - set(columns_to_keep)
+        ds = ds.remove_columns(list(columns_to_remove))
     n = len(ds)
+
     logging.info(
         f'Loaded dataset: {cfg.dataset.name}, split={cfg.dataset.split}, size={n}')
 
@@ -147,7 +159,7 @@ def main(cfg: DictConfig):
         os.remove(out_path)
         logging.info(f"Removed existing memmap at {out_path} for fresh start.")
 
-    if cfg.dataset.task_name in ["factuality"]:
+    if task_name in ["factuality"]:
         hidden_size *= 2
 
     mm = np.memmap(
@@ -239,9 +251,10 @@ def main(cfg: DictConfig):
 
         last_idx = attention_mask.long().sum(dim=1).clamp_min(1) - 1  # (B,)
 
-        if cfg.dataset.task_name in ['factuality']:
+        if task_name == 'factuality':
             verb_indices = []
             for i, item in enumerate(batch_item):
+                assert item['pred_token'] >= 1
                 target_word_id = item['pred_token'] - 1
                 verb_idx = get_verb_token_index(enc, i, target_word_id)
                 if verb_idx is None:
@@ -275,8 +288,7 @@ def main(cfg: DictConfig):
                 bsz, -1)  # (B,D) or (B,2D)
             hidden_embed.append(selected)
         hidden_embed = torch.stack(hidden_embed, dim=1)  # (B,33,D)
-        from IPython import embed
-        embed()
+
         # Move to CPU + cast for storage
         hidden_embed_np = hidden_embed.to(torch.float16 if cfg.cache.type ==
                                           np.float16 else torch.float32).cpu().numpy()
