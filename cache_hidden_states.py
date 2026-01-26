@@ -44,6 +44,30 @@ def collate_text(batch: List[Dict], text_col) -> List[str]:
     return [ex[text_col] for ex in batch]
 
 
+def factuality_dataset(datapiece: dict, tokenizer):
+    '''Process one datapoint from factuality dataset to get verb token index'''
+    sentence = datapiece['sentence']
+    verb_id = datapiece['pred_token']
+    tokens = tokenizer(sentence, truncation=True, padding="max_length",
+                       max_length=128, return_tensors='pt')
+    word_id = tokens.word_ids()
+    # the maximum idx where word_id equals verb_id
+    verb_token_idx = max(
+        idx for idx, wid in enumerate(word_id) if wid == verb_id-1)
+
+
+def get_verb_token_index(batch_encoding, batch_idx, target_word_idx):
+    """
+    find the last token index corresponding to the target word (predicate) in the original text
+    """
+    w_ids = batch_encoding.word_ids(batch_index=batch_idx)
+
+    for i in range(len(w_ids) - 1, -1, -1):
+        if w_ids[i] == target_word_idx:
+            return i
+    return None
+
+
 def load_hidden_states(dir_path: str):
     meta_path = os.path.join(dir_path, "meta.json")
 
@@ -123,6 +147,9 @@ def main(cfg: DictConfig):
         os.remove(out_path)
         logging.info(f"Removed existing memmap at {out_path} for fresh start.")
 
+    if cfg.dataset.task_name in ["factuality"]:
+        hidden_size *= 2
+
     mm = np.memmap(
         out_path,
         dtype=cfg.cache.type,
@@ -167,8 +194,8 @@ def main(cfg: DictConfig):
         batch_size=cfg.cache.batch_size,
         shuffle=False,
         num_workers=cfg.dataset.num_workers,
-        collate_fn=lambda b: collate_text(b, cfg.dataset.text_col),
-        pin_memory=(device == "cuda")
+        collate_fn=lambda x: x,  # directly return raw dictionary list
+        pin_memory=False
     )
 
     # Fast-forward dataloader if resuming
@@ -200,43 +227,62 @@ def main(cfg: DictConfig):
     logging.info(f"starting at index {cur}")
 
     while True:
-        texts = next(loader_iter, None)
-        if texts is None:
+        batch_item = next(loader_iter, None)
+        if batch_item is None:
             break
 
+        texts = [item[cfg.dataset.text_col] for item in batch_item]
         bsz = len(texts)
         enc = tokenize_texts(texts)
         input_ids = enc["input_ids"].to(device, non_blocking=True)
         attention_mask = enc["attention_mask"].to(device, non_blocking=True)
 
-        # last non-pad token index per sequence
-        # attention_mask sums to actual length; last index = len-1
         last_idx = attention_mask.long().sum(dim=1).clamp_min(1) - 1  # (B,)
 
-        # Forward with hidden states
+        if cfg.dataset.task_name in ['factuality']:
+            verb_indices = []
+            for i, item in enumerate(batch_item):
+                target_word_id = item['pred_token'] - 1
+                verb_idx = get_verb_token_index(enc, i, target_word_id)
+                if verb_idx is None:
+                    raise ValueError(
+                        'Could not find verb token index for item:', item)
+                verb_indices.append(verb_idx)
+
+            verb_indices = torch.tensor(verb_indices, device=device)  # (B,)
+            hidden_indices = torch.stack(
+                [verb_indices, last_idx], dim=1)  # (B,2)
+        else:
+            hidden_indices = last_idx.unsqueeze(1)
+
         out = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
             use_cache=False,
         )
-        hidden_states = out.hidden_states  # tuple length 33, each (B,T,D)
+        hidden_states = out.hidden_states
 
-        # Collect last-token for all layers -> (B, 33, D)
-        # We gather along T dimension using last_idx
-        # For each layer hs: (B,T,D) -> (B,D) at last_idx
-        b_last = []
-        arange_b = torch.arange(bsz, device=device)
+        # For somo and verb-subject agreement tasks, we collect last-token for all layers. For each layer, (B,T,D) -> (B,D) at last_idx. Finally (B,33,D)
+        # For facuitality, we concat the final token in the verb's and the last token's hidden state. For each layer, (B,T,D) -> (B,2D). Finally (B,33,2D)
+        hidden_embed = []
         for hs in hidden_states:
-            b_last.append(hs[arange_b, last_idx, :])  # (B,D)
-        b_last = torch.stack(b_last, dim=1)  # (B,33,D)
+            dim = hs.size(-1)
+            idx_expanded = hidden_indices.unsqueeze(-1).expand(-1, -1, dim)
 
+            # selected[:, idx, :] == hs[torch.arange(128), hidden_indices[:, idx], :]
+            selected = torch.gather(hs, 1, idx_expanded).view(
+                bsz, -1)  # (B,D) or (B,2D)
+            hidden_embed.append(selected)
+        hidden_embed = torch.stack(hidden_embed, dim=1)  # (B,33,D)
+        from IPython import embed
+        embed()
         # Move to CPU + cast for storage
-        b_last_np = b_last.to(torch.float16 if cfg.cache.type ==
-                              np.float16 else torch.float32).cpu().numpy()
+        hidden_embed_np = hidden_embed.to(torch.float16 if cfg.cache.type ==
+                                          np.float16 else torch.float32).cpu().numpy()
 
         # Write into memmap
-        mm[cur:cur + bsz, :, :] = b_last_np
+        mm[cur:cur + bsz, :, :] = hidden_embed_np
         mm.flush()
 
         cur += bsz

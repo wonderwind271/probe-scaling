@@ -1,10 +1,10 @@
 model: 
   name: "meta-llama/Meta-Llama-3.1-8B"
   short: 'llama'
-  max_length: 128  # somo needs 256
+  max_length: 128
 
 dataset: 
-  name: "Seed42Lab/en-ud-train"  # compling/somo, compling/factuality
+  name: "Seed42Lab/en-ud-train"  # compling/somo, compling/event_factuality
   split: "train"
   text_col: "text"
   label_col: "label"
@@ -12,7 +12,7 @@ dataset:
   num_workers: 1
 
 cache:
-  batch_size: 128
+  batch_size: 64
   type: float32
   train_epochs: 10
   resume: False
