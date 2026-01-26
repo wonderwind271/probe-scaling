@@ -20,6 +20,20 @@ import os
 log = logging.getLogger(__name__)
 
 
+def merge_dicts_min(d1: dict, d2: dict) -> dict:
+    merged = {}
+    for k in d1.keys() | d2.keys():  # union of keys
+        if k in d1 and k in d2:
+            merged[k] = min(d1[k], d2[k])
+        elif k in d1:
+            merged[k] = d1[k]
+        else:
+            merged[k] = d2[k]
+
+    return merged
+
+
+
 def tokenize_fn(batch, tokenizer):
     return tokenizer(
         batch["text"],
@@ -145,6 +159,40 @@ def train_probe(model, train_loader, device, num_epochs=5, lr=1e-3):
     return model
 
 
+def train_probe_w_eval(model, train_loader, test_loader, device, num_epochs=5, lr=1e-3):
+    model = model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    final_ce_sum_by_layer = {}
+    for epoch in range(num_epochs):
+        model.train()
+        total_loss = 0.0
+        pbar = tqdm(
+            train_loader, desc=f"  Train epoch {epoch+1}/{num_epochs}", leave=False)
+
+        for batch in pbar:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["label"].to(device)
+
+            out = model(input_ids=input_ids,
+                        attention_mask=attention_mask, labels=labels)
+            loss = out["loss"]
+
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            total_loss += loss.item()
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
+
+        avg_loss = total_loss / max(1, len(train_loader))
+        logging.info(f"    avg_train_loss={avg_loss:.4f}")
+        ce_sum_by_layer, n_ex = summed_ce_by_layer(model, test_loader, device)
+        final_ce_sum_by_layer = merge_dicts_min(final_ce_sum_by_layer, ce_sum_by_layer)
+
+    return model, final_ce_sum_by_layer, n_ex
+
+
 def evaluate_probe(tokenizer, cfg, model, device):
     '''Evaluate probe accuracy per layer on test set'''
     logging.info("\n[Probe Evaluation on Test Set]")
@@ -241,16 +289,18 @@ def main(cfg: DictConfig):
         encode_loader = DataLoader(
             next_chunk, batch_size=cfg.mdl.batch_size, shuffle=False)
 
-        # train probe on current train_data
-        model = train_probe(model, train_loader, device,
-                            num_epochs=cfg.mdl.train_epochs, lr=cfg.mdl.lr)
+        # # train probe on current train_data
+        # model = train_probe(model, train_loader, device,
+        #                     num_epochs=cfg.mdl.train_epochs, lr=cfg.mdl.lr)
 
-        # compute summed CE on unseen chunk (this is the "code length" for this stage)
-        ce_sum_by_layer, n_ex = summed_ce_by_layer(
-            model, encode_loader, device)
+        # # compute summed CE on unseen chunk (this is the "code length" for this stage)
+        # ce_sum_by_layer, n_ex = summed_ce_by_layer(
+        #     model, encode_loader, device)
+        model, ce_sum_by_layer, n_ex = train_probe_w_eval(model, train_loader, encode_loader, device, num_epochs=cfg.mdl.train_epochs, lr=cfg.mdl.lr)
+        
         total_encoded_examples += n_ex
         for layer, ce_sum in ce_sum_by_layer.items():
-            mdl_sum_by_layer[layer] += ce_sum
+            mdl_sum_by_layer[layer] += ce_sum        
 
         # (optional) print a compact summary: last layer + avg across layers
         layers = sorted(mdl_sum_by_layer.keys())
