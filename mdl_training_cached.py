@@ -39,7 +39,8 @@ def _infer_dtype(dtype_str: str) -> np.dtype:
         return np.float16
     if "float32" in s:
         return np.float32
-    raise ValueError(f"Unsupported dtype in meta.json: {dtype_str}. Use float16/float32 for numpy memmap.")
+    raise ValueError(
+        f"Unsupported dtype in meta.json: {dtype_str}. Use float16/float32 for numpy memmap.")
 
 
 def load_cache_dir(cache_dir: str) -> Tuple[np.memmap, np.ndarray, CacheMeta, Dict]:
@@ -53,7 +54,8 @@ def load_cache_dir(cache_dir: str) -> Tuple[np.memmap, np.ndarray, CacheMeta, Di
     with open(meta_path, "r", encoding="utf-8") as f:
         meta_raw = json.load(f)
 
-    memmap_file = meta_raw.get("memmap_file", "last_token_hidden_states.memmap")
+    memmap_file = meta_raw.get(
+        "memmap_file", "last_token_hidden_states.memmap")
     memmap_path = os.path.join(cache_dir, memmap_file)
     if not os.path.exists(memmap_path):
         raise FileNotFoundError(f"Missing memmap file: {memmap_path}")
@@ -68,7 +70,8 @@ def load_cache_dir(cache_dir: str) -> Tuple[np.memmap, np.ndarray, CacheMeta, Di
     labels = np.load(labels_path).astype(np.int64)
 
     if labels.shape[0] != shape[0]:
-        raise ValueError(f"Label length mismatch: labels={labels.shape[0]} vs feats={shape[0]}")
+        raise ValueError(
+            f"Label length mismatch: labels={labels.shape[0]} vs feats={shape[0]}")
 
     cm = CacheMeta(
         memmap_file=memmap_file,
@@ -108,7 +111,8 @@ def geometric_split_indices(n: int, split_num: int = 5, ratio: float = 2.0, seed
             deficit -= take
             i -= 1
         if deficit > 0:
-            raise RuntimeError("Could not construct valid geometric splits; dataset too small.")
+            raise RuntimeError(
+                "Could not construct valid geometric splits; dataset too small.")
 
     splits = []
     start = 0
@@ -127,7 +131,8 @@ def build_probe(probe_type: str, d_in: int, hidden_sizes: List[int], num_classes
     if probe_type == "linear":
         return nn.Linear(d_in, num_classes), [d_in, num_classes]
     if probe_type in ("mlp", "multilinear"):
-        assert hidden_sizes and len(hidden_sizes) > 0, "probe_hidden_size must be non-empty for mlp/multilinear"
+        assert hidden_sizes and len(
+            hidden_sizes) > 0, "probe_hidden_size must be non-empty for mlp/multilinear"
         layer_dim = [d_in] + list(hidden_sizes) + [num_classes]
         if probe_type == "mlp":
             return MLP(layer_dim=layer_dim), layer_dim
@@ -149,11 +154,12 @@ def ce_sum_on_indices(
     model: nn.Module,
     X: torch.Tensor,   # (N,D) on device
     y: torch.Tensor,   # (N,) on device
-    idx: torch.Tensor, # (M,) on device
+    idx: torch.Tensor,  # (M,) on device
     batch_size: int,
     desc: str,
     position: int,
 ) -> float:
+    '''compute cross-entropy sum to get MDL'''
     model.eval()
     total = 0.0
     for b in tqdm(make_batches(idx, batch_size), desc=desc, position=position, leave=False):
@@ -178,7 +184,8 @@ def eval_acc_loss_on_indices(
     loss_sum = 0.0
     for b in tqdm(make_batches(idx, batch_size), desc=desc, position=position, leave=False):
         logits = model(X[b])
-        loss_sum += float(F.cross_entropy(logits, y[b], reduction="sum").item())
+        loss_sum += float(F.cross_entropy(logits,
+                          y[b], reduction="sum").item())
         pred = logits.argmax(dim=-1)
         correct += int((pred == y[b]).sum().item())
         total += int(b.numel())
@@ -195,6 +202,7 @@ def train_epoch_on_indices(
     desc: str,
     position: int,
 ) -> float:
+    '''train one epoch on given indices'''
     model.train()
     loss_sum = 0.0
     n = 0
@@ -216,8 +224,8 @@ def train_stage_with_early_stop_mdl_tensor(
     probe: nn.Module,
     X: torch.Tensor,         # full train X for this layer, on device
     y: torch.Tensor,         # full train y, on device
-    train_idx: torch.Tensor, # indices for training set (growing), on device
-    encode_idx: torch.Tensor,# indices for encode set, on device
+    train_idx: torch.Tensor,  # indices for training set (growing), on device
+    encode_idx: torch.Tensor,  # indices for encode set, on device
     *,
     batch_size: int,
     train_epochs: int,
@@ -229,6 +237,7 @@ def train_stage_with_early_stop_mdl_tensor(
     stages_total: int,
 ) -> Tuple[float, int]:
     """
+    Early stopping by mdl
     Returns:
       best_ce_sum_for_stage, best_epoch
     """
@@ -285,9 +294,11 @@ def online_mdl_for_layer_tensor(
     *,
     layer: int,
 ) -> Tuple[float, int, List[int]]:
+    '''iterate over splits for online MDL'''
     batch_size = int(cfg.mdl.batch_size)
     probe_type = str(cfg.mdl.probe_type)
-    hidden_sizes = list(cfg.mdl.probe_hidden_size) if str(cfg.mdl.probe_type).lower() != "linear" else []
+    hidden_sizes = list(cfg.mdl.probe_hidden_size) if str(
+        cfg.mdl.probe_type).lower() != "linear" else []
     train_epochs = int(cfg.mdl.train_epochs)
     early_gap = int(cfg.mdl.early_stopping_gap)
     lr = float(cfg.mdl.lr)
@@ -301,7 +312,8 @@ def online_mdl_for_layer_tensor(
     # initial train idx
     train_idx_np = splits[0]
 
-    stage_iter = tqdm(range(stages_total), desc=f"MDL stages (layer {layer:02d})", position=1, leave=False)
+    stage_iter = tqdm(range(
+        stages_total), desc=f"MDL stages (layer {layer:02d})", position=1, leave=False)
     for s in stage_iter:
         stage = s + 1
         encode_idx_np = splits[s + 1]
@@ -310,10 +322,13 @@ def online_mdl_for_layer_tensor(
         # here we're already on GPU, but sorting makes batching more cache-friendly anyway.
         encode_idx_np = np.sort(encode_idx_np)
 
-        train_idx = torch.from_numpy(train_idx_np.astype(np.int64)).to(X.device)
-        encode_idx = torch.from_numpy(encode_idx_np.astype(np.int64)).to(X.device)
+        train_idx = torch.from_numpy(
+            train_idx_np.astype(np.int64)).to(X.device)
+        encode_idx = torch.from_numpy(
+            encode_idx_np.astype(np.int64)).to(X.device)
 
-        probe, _ = build_probe(probe_type, d_in=d_in, hidden_sizes=hidden_sizes, num_classes=2)
+        probe, _ = build_probe(probe_type, d_in=d_in,
+                               hidden_sizes=hidden_sizes, num_classes=2)
 
         best_ce_sum, best_epoch = train_stage_with_early_stop_mdl_tensor(
             probe=probe,
@@ -338,7 +353,8 @@ def online_mdl_for_layer_tensor(
         # grow training set
         train_idx_np = np.concatenate([train_idx_np, encode_idx_np], axis=0)
 
-        stage_iter.set_postfix(mdl=float(mdl_sum), encoded=total_encoded, best_ep=best_epoch)
+        stage_iter.set_postfix(
+            mdl=float(mdl_sum), encoded=total_encoded, best_ep=best_epoch)
 
     return mdl_sum, total_encoded, stop_epochs
 
@@ -349,25 +365,30 @@ def train_final_probe_full_train_tensor(
     *,
     layer: int,
 ) -> nn.Module:
+    '''build a new probe, train on full train set, for accuracy eval'''
     batch_size = int(cfg.mdl.batch_size)
     probe_type = str(cfg.mdl.probe_type)
-    hidden_sizes = list(cfg.mdl.probe_hidden_size) if str(cfg.mdl.probe_type).lower() != "linear" else []
+    hidden_sizes = list(cfg.mdl.probe_hidden_size) if str(
+        cfg.mdl.probe_type).lower() != "linear" else []
     train_epochs = int(cfg.mdl.train_epochs)
     early_gap = int(cfg.mdl.early_stopping_gap)
     lr = float(cfg.mdl.lr)
 
     d_in = X_train.shape[1]
-    probe, _ = build_probe(probe_type, d_in=d_in, hidden_sizes=hidden_sizes, num_classes=2)
+    probe, _ = build_probe(probe_type, d_in=d_in,
+                           hidden_sizes=hidden_sizes, num_classes=2)
     probe.to(X_train.device)
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
-    all_idx = torch.arange(X_train.size(0), device=X_train.device, dtype=torch.long)
+    all_idx = torch.arange(X_train.size(
+        0), device=X_train.device, dtype=torch.long)
 
     best_loss = float("inf")
     best_state = None
     since_best = 0
 
-    epoch_iter = tqdm(range(1, train_epochs + 1), desc=f"Final train (layer {layer:02d})", position=1, leave=False)
+    epoch_iter = tqdm(range(1, train_epochs + 1),
+                      desc=f"Final train (layer {layer:02d})", position=1, leave=False)
     for epoch in epoch_iter:
         perm = all_idx[torch.randperm(all_idx.numel(), device=X_train.device)]
         avg_loss = train_epoch_on_indices(
@@ -375,11 +396,13 @@ def train_final_probe_full_train_tensor(
             desc=f"Final batches (L{layer:02d}) ep {epoch}/{train_epochs}",
             position=2,
         )
-        epoch_iter.set_postfix(avg_loss=float(avg_loss), best=float(best_loss), since_best=since_best)
+        epoch_iter.set_postfix(avg_loss=float(avg_loss),
+                               best=float(best_loss), since_best=since_best)
 
         if avg_loss < best_loss - 1e-9:
             best_loss = avg_loss
-            best_state = {k: v.detach().cpu().clone() for k, v in probe.state_dict().items()}
+            best_state = {k: v.detach().cpu().clone()
+                          for k, v in probe.state_dict().items()}
             since_best = 0
         else:
             since_best += 1
@@ -411,8 +434,10 @@ def main(cfg: DictConfig):
     log.info(f"Device: {device}")
 
     # Load caches (memmap + labels.npy)
-    train_feats, train_labels_np, train_meta, train_meta_raw = load_cache_dir(cfg.dataset.train)
-    test_feats, test_labels_np, test_meta, test_meta_raw = load_cache_dir(cfg.dataset.test)
+    train_feats, train_labels_np, train_meta, train_meta_raw = load_cache_dir(
+        cfg.dataset.train)
+    test_feats, test_labels_np, test_meta, test_meta_raw = load_cache_dir(
+        cfg.dataset.test)
 
     if train_meta.hidden_size != test_meta.hidden_size or train_meta.num_states != test_meta.num_states:
         raise ValueError(
@@ -422,13 +447,16 @@ def main(cfg: DictConfig):
 
     N_train, L, D = train_meta.shape
     N_test = test_meta.shape[0]
-    log.info(f"Train cached feats: N={N_train} L={L} D={D} dtype={train_meta.dtype}")
-    log.info(f"Test  cached feats: N={N_test} L={L} D={D} dtype={test_meta.dtype}")
+    log.info(
+        f"Train cached feats: N={N_train} L={L} D={D} dtype={train_meta.dtype}")
+    log.info(
+        f"Test  cached feats: N={N_test} L={L} D={D} dtype={test_meta.dtype}")
 
     # Geometric splits on train indices (CPU arrays)
     split_num = 5
     ratio = 2.0
-    splits = geometric_split_indices(N_train, split_num=split_num, ratio=ratio, seed=seed)
+    splits = geometric_split_indices(
+        N_train, split_num=split_num, ratio=ratio, seed=seed)
     log.info(f"Geometric splits sizes: {[len(s) for s in splits]}")
 
     # Labels to device once (small)
@@ -448,8 +476,10 @@ def main(cfg: DictConfig):
         # ONE-TIME disk touch per layer: load full layer matrix into torch
         # ---------
         # train_feats[:, layer, :] is a (N,D) view; np.asarray makes it contiguous in RAM
-        X_train = torch.from_numpy(np.asarray(train_feats[:, layer, :], dtype=np.float32)).to(device)
-        X_test = torch.from_numpy(np.asarray(test_feats[:, layer, :], dtype=np.float32)).to(device)
+        X_train = torch.from_numpy(np.asarray(
+            train_feats[:, layer, :], dtype=np.float32)).to(device)
+        X_test = torch.from_numpy(np.asarray(
+            test_feats[:, layer, :], dtype=np.float32)).to(device)
 
         # Online MDL (no disk reads now)
         log.info(f"\n[Layer {layer:02d}] Online MDL (tensor-only)...")
@@ -464,12 +494,16 @@ def main(cfg: DictConfig):
         nll_by_layer[layer] = float(mdl_sum) / max(int(n_encoded), 1)
         stop_epoch_by_layer[layer] = stop_epochs
 
-        log.info(f"[Layer {layer:02d}] total_MDL(sum CE)={mdl_sum:.2f}, encoded={n_encoded}, NLL={nll_by_layer[layer]:.4f}")
-        log.info(f"[Layer {layer:02d}] stopping epochs per stage = {stop_epochs}")
+        log.info(
+            f"[Layer {layer:02d}] total_MDL(sum CE)={mdl_sum:.2f}, encoded={n_encoded}, NLL={nll_by_layer[layer]:.4f}")
+        log.info(
+            f"[Layer {layer:02d}] stopping epochs per stage = {stop_epochs}")
 
         # Final train on full train (tensor-only) & evaluate on test (tensor-only)
-        log.info(f"[Layer {layer:02d}] Final train + test eval (tensor-only)...")
-        final_probe = train_final_probe_full_train_tensor(X_train, y_train_all, cfg, layer=layer)
+        log.info(
+            f"[Layer {layer:02d}] Final train + test eval (tensor-only)...")
+        final_probe = train_final_probe_full_train_tensor(
+            X_train, y_train_all, cfg, layer=layer)
 
         test_idx = torch.arange(N_test, device=device, dtype=torch.long)
         test_metrics = eval_acc_loss_on_indices(
@@ -480,7 +514,8 @@ def main(cfg: DictConfig):
         )
         test_acc_by_layer[layer] = float(test_metrics["acc"])
         test_loss_by_layer[layer] = float(test_metrics["loss"])
-        log.info(f"[Layer {layer:02d}] test_acc={test_acc_by_layer[layer]:.4f} test_loss={test_loss_by_layer[layer]:.4f}")
+        log.info(
+            f"[Layer {layer:02d}] test_acc={test_acc_by_layer[layer]:.4f} test_loss={test_loss_by_layer[layer]:.4f}")
 
         # Free GPU memory for next layer
         del X_train, X_test, final_probe
@@ -510,8 +545,10 @@ def main(cfg: DictConfig):
     with open(os.path.join(out_dir, "results.json"), "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    best_layer = min(mdl_sum_by_layer.keys(), key=lambda k: mdl_sum_by_layer[k])
-    log.info(f"\n[BEST by MDL] layer={best_layer} MDL={mdl_sum_by_layer[best_layer]:.2f} NLL={nll_by_layer[best_layer]:.4f}")
+    best_layer = min(mdl_sum_by_layer.keys(),
+                     key=lambda k: mdl_sum_by_layer[k])
+    log.info(
+        f"\n[BEST by MDL] layer={best_layer} MDL={mdl_sum_by_layer[best_layer]:.2f} NLL={nll_by_layer[best_layer]:.4f}")
     log.info(f"[Outputs] {out_dir}")
 
 

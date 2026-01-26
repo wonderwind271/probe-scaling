@@ -1,0 +1,24 @@
+model: 
+  name: "meta-llama/Meta-Llama-3.1-8B"
+  short: 'llama'
+  max_length: 128
+
+dataset: 
+  name: "Seed42Lab/en-ud-train"  # compling/somo, compling/event_factuality
+  split: "train"
+  text_col: "text"
+  label_col: "label"
+  num_workers: 1
+  task_name: "verb-agreement"  # verb-agreement, somo, event_factuality
+
+cache:
+  batch_size: 64
+  bf16: False
+  train_epochs: 10
+  resume: False
+
+out_dir: ${calc_path:${dataset.name}, ${dataset.split}, ${dataset.task_name}, ${model.short}}
+
+hydra:
+  run:
+    dir: ${out_dir}
