@@ -16,10 +16,10 @@ Storage:
 ---
 Xiaoxi: add different tasks/datasets.
 - Somo: use the first 15k in training split.
-    python cache_hidden_states.py dataset.name=compling/somo model.max_length=64
+    python cache_hidden_states.py dataset.name=compling/somo model.max_length=64 dataset.task_name=somo
 
 - factuality:
-    python cache_hidden_states.py dataset.name=compling/event_factuality dataset.split=train model.max_length=192 dataset.text_col=sentence
+    python cache_hidden_states.py dataset.name=compling/event_factuality dataset.split=train model.max_length=192 dataset.text_col=sentence dataset.task_name=factuality
 """
 
 import os
@@ -75,31 +75,26 @@ def load_hidden_states(dir_path: str):
     return hiddens, meta
 
 
-def build_out_dir(cfg):
-    '''parse cfg to build output directory'''
-    if cfg.dataset.name in ['Seed42Lab/en-ud-train', 'Seed42Lab/en-ud-test']:
-        task_name = 'verb_agreement'
-        if cfg.dataset.name == 'Seed42Lab/en-ud-test':
-            split = 'test'
-        else:
-            split = 'train'
-    elif cfg.dataset.name == 'compling/somo':
-        task_name = 'somo'
-        split = cfg.dataset.split
-    elif cfg.dataset.name == 'compling/event_factuality':
-        task_name = 'factuality'
-        split = cfg.dataset.split
+def get_custom_dir(dataset_name, dataset_split, task_name, model_short):
+    if dataset_name == 'Seed42Lab/en-ud-test':
+        split = 'test'
+    elif dataset_name == 'Seed42Lab/en-ud-train':
+        split = 'train'
+    elif dataset_name == 'compling/somo':
+        split = dataset_split
+    elif dataset_name == 'compling/event_factuality':
+        split = dataset_split
     else:
-        raise ValueError(f'Unknown dataset name: {cfg.dataset.name}')
-    out_dir = f'cache/{cfg.model.short}/{task_name}_{split}'
-    os.makedirs(out_dir, exist_ok=True)
-    return out_dir, task_name
+        raise ValueError(f'Unknown dataset name: {dataset_name}')
+
+    return f'cache/{model_short}/{task_name}_{split}'
 
 
 @hydra.main(version_base=None, config_path=".", config_name="config_cache_hidden")
 @torch.no_grad()
 def main(cfg: DictConfig):
-    out_dir, task_name = build_out_dir(cfg)
+    out_dir = HydraConfig.get().runtime.output_dir
+    logging.info(f"Output directory: {out_dir}")
 
     # 1) Load dataset
     ds = load_dataset(cfg.dataset.name, split=cfg.dataset.split)
@@ -107,7 +102,7 @@ def main(cfg: DictConfig):
         shuffled_ds = ds.shuffle(seed=42)
         ds = shuffled_ds.select(range(15000))
         logging.info(f"Subsetting Somo to 15k examples.")
-    if task_name == 'factuality':
+    if cfg.dataset.task_name == 'factuality':
         columns_to_keep = ["sentence", "label", 'pred_token']
         columns_to_remove = set(ds.column_names) - set(columns_to_keep)
         ds = ds.remove_columns(list(columns_to_remove))
@@ -159,7 +154,7 @@ def main(cfg: DictConfig):
         os.remove(out_path)
         logging.info(f"Removed existing memmap at {out_path} for fresh start.")
 
-    if task_name in ["factuality"]:
+    if cfg.dataset.task_name in ["factuality"]:
         hidden_size *= 2
 
     mm = np.memmap(
@@ -251,7 +246,7 @@ def main(cfg: DictConfig):
 
         last_idx = attention_mask.long().sum(dim=1).clamp_min(1) - 1  # (B,)
 
-        if task_name == 'factuality':
+        if cfg.dataset.task_name == 'factuality':
             verb_indices = []
             for i, item in enumerate(batch_item):
                 assert item['pred_token'] >= 1
@@ -324,4 +319,5 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    OmegaConf.register_new_resolver("calc_path", get_custom_dir)
     main()

@@ -9,9 +9,14 @@ dataset:
   text_col: "text"
   label_col: "label"
   num_workers: 1
+  task_name: "verb-agreement"
 
 cache:
   batch_size: 64
   type: float32
   train_epochs: 10
   resume: False
+
+hydra:
+  run:
+    dir: ${calc_path:${dataset.name}, ${dataset.split}, ${dataset.task_name}, ${model.short}}
