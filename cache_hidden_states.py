@@ -185,8 +185,7 @@ def main(cfg: DictConfig):
                 f,
                 indent=2,
             )
-    from IPython import embed
-    embed()
+
     # Resume bookkeeping
     start_idx = 0
     if cfg.cache.resume and os.path.exists(progress_path):
