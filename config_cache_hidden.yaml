@@ -1,0 +1,22 @@
+model: 
+  name: "meta-llama/Meta-Llama-3.1-8B"
+  short: 'llama'
+  max_length: 128
+
+dataset: 
+  name: "Seed42Lab/en-ud-train"  # compling/somo, compling/factuality
+  split: "train"
+  text_col: "text"
+  label_col: "label"
+  task_name: "verb_agreement"
+  num_workers: 1
+
+cache:
+  batch_size: 128
+  type: float32
+  train_epochs: 10
+  resume: False
+
+hydra:
+  run:
+    dir: 'cache/${model.short}/${dataset.task_name}_${dataset.split}'

@@ -3,7 +3,7 @@ model_short: 'llama'
 
 dataset: 
   train: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens
-  test: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens_test
+  test: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens_test  
 
 mdl:
   batch_size: 16
@@ -15,6 +15,4 @@ mdl:
   seed: 42
   early_stopping_gap: 3
 
-hydra:
-  run:
-    dir: outputs/${model_short}/${mdl.probe_type}_${now:%m%d_%H%M%S}
+

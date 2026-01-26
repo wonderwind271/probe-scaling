@@ -23,29 +23,13 @@ import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
+import hydra
+from omegaconf import DictConfig, OmegaConf
+from hydra.core.hydra_config import HydraConfig
 
 
-# -----------------------------
-# Config (edit as you like)
-# -----------------------------
-DATASET_NAME = "Seed42Lab/en-ud-train"
-SPLIT = "train"
-TEXT_COL = "text"
-
-MODEL_NAME = "meta-llama/Meta-Llama-3.1-8B"
-MAX_LEN = 128
-
-BATCH_SIZE = 8          # adjust based on GPU memory
-NUM_WORKERS = 1         # dataloader workers
-OUT_DIR = "/scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens"
-OUT_DTYPE = np.float32  # np.float16 (smaller) or np.float32 (bigger)
-
-# If you want to resume partially written runs:
-RESUME = True
-
-
-def collate_text(batch: List[Dict]) -> List[str]:
-    return [ex[TEXT_COL] for ex in batch]
+def collate_text(batch: List[Dict], text_col) -> List[str]:
+    return [ex[text_col] for ex in batch]
 
 
 def load_hidden_states(dir_path: str):
@@ -68,13 +52,14 @@ def load_hidden_states(dir_path: str):
     return hiddens, meta
 
 
-
+@hydra.main(version_base=None, config_path=".", config_name="config_cache_hidden")
 @torch.no_grad()
-def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
+def main(cfg: DictConfig):
+    out_dir = HydraConfig.get().runtime.output_dir
+    os.makedirs(out_dir, exist_ok=True)
 
     # 1) Load dataset
-    ds = load_dataset(DATASET_NAME, split=SPLIT)
+    ds = load_dataset(cfg.dataset.name, split=cfg.dataset.split)
     n = len(ds)
 
     # Optional: if you truly only want ~10k examples
@@ -82,7 +67,7 @@ def main():
     # n = len(ds)
 
     # 2) Tokenizer
-    tok = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
+    tok = AutoTokenizer.from_pretrained(cfg.model.name, use_fast=True)
     # Llama tokenizers often have no pad token by default
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -92,14 +77,14 @@ def main():
             texts,
             padding="max_length",
             truncation=True,
-            max_length=MAX_LEN,
+            max_length=cfg.model.max_length,
             return_tensors="pt",
         )
 
     # 3) Model
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+        cfg.model.name,
         torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
         low_cpu_mem_usage=True,
         # If you have multiple GPUs and want HF to shard automatically, uncomment:
@@ -114,18 +99,19 @@ def main():
     num_states = num_hidden_layers + 1             # embeddings + each layer => 33
 
     # 4) Prepare output memmap: (N, 33, 4096)
-    out_path = os.path.join(OUT_DIR, "last_token_hidden_states.memmap")
-    meta_path = os.path.join(OUT_DIR, "meta.json")
-    progress_path = os.path.join(OUT_DIR, "progress.json")
+    out_path = os.path.join(
+        out_dir, "last_token_hidden_states.memmap")
+    meta_path = os.path.join(out_dir, "meta.json")
+    progress_path = os.path.join(out_dir, "progress.json")
 
     # Create or open memmap
-    if (not RESUME) and os.path.exists(out_path):
+    if (not cfg.cache.resume) and os.path.exists(out_path):
         os.remove(out_path)
 
     mm = np.memmap(
         out_path,
-        dtype=OUT_DTYPE,
-        mode="r+" if (RESUME and os.path.exists(out_path)) else "w+",
+        dtype=cfg.cache.type,
+        mode="r+" if (cfg.cache.resume and os.path.exists(out_path)) else "w+",
         shape=(n, num_states, hidden_size),
     )
 
@@ -134,16 +120,16 @@ def main():
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "dataset": DATASET_NAME,
-                    "split": SPLIT,
-                    "text_col": TEXT_COL,
-                    "model": MODEL_NAME,
-                    "max_len": MAX_LEN,
+                    "dataset": cfg.dataset.name,
+                    "split": cfg.dataset.split,
+                    "text_col": cfg.dataset.text_col,
+                    "model": cfg.model.name,
+                    "max_len": cfg.model.max_length,
                     "hidden_size": hidden_size,
                     "num_hidden_layers": num_hidden_layers,
                     "num_states": num_states,
                     "memmap_file": os.path.basename(out_path),
-                    "dtype": str(OUT_DTYPE),
+                    "dtype": str(cfg.cache.type),
                     "shape": [n, num_states, hidden_size],
                 },
                 f,
@@ -152,7 +138,7 @@ def main():
 
     # Resume bookkeeping
     start_idx = 0
-    if RESUME and os.path.exists(progress_path):
+    if cfg.cache.resume and os.path.exists(progress_path):
         try:
             with open(progress_path, "r", encoding="utf-8") as f:
                 start_idx = int(json.load(f).get("next_index", 0))
@@ -162,23 +148,23 @@ def main():
     # 5) DataLoader
     loader = DataLoader(
         ds,
-        batch_size=BATCH_SIZE,
+        batch_size=cfg.cache.batch_size,
         shuffle=False,
-        num_workers=NUM_WORKERS,
-        collate_fn=collate_text,
-        pin_memory=(device == "cuda"),
+        num_workers=cfg.dataset.num_workers,
+        collate_fn=lambda b: collate_text(b, cfg.dataset.text_col),
+        pin_memory=(device == "cuda")
     )
 
     # Fast-forward dataloader if resuming
     if start_idx > 0:
         # Skip batches until we reach start_idx
-        skip_batches = start_idx // BATCH_SIZE
+        skip_batches = start_idx // cfg.cache.batch_size
         # Consume skip_batches batches
         it = iter(loader)
         for _ in range(skip_batches):
             next(it, None)
         loader_iter = it
-        batch_offset = skip_batches * BATCH_SIZE
+        batch_offset = skip_batches * cfg.cache.batch_size
     else:
         loader_iter = iter(loader)
         batch_offset = 0
@@ -191,7 +177,8 @@ def main():
     # from tqdm.auto import tqdm
     # for texts in tqdm(loader_iter, total=(len(loader) - skip_batches if start_idx else len(loader))):
     print(f"[INFO] n={n} | writing to {out_path}")
-    print(f"[INFO] hidden_size={hidden_size} | num_states={num_states} | dtype={OUT_DTYPE}")
+    print(
+        f"[INFO] hidden_size={hidden_size} | num_states={num_states} | dtype={cfg.cache.type}")
     print(f"[INFO] starting at index {cur}")
 
     while True:
@@ -227,7 +214,8 @@ def main():
         b_last = torch.stack(b_last, dim=1)  # (B,33,D)
 
         # Move to CPU + cast for storage
-        b_last_np = b_last.to(torch.float16 if OUT_DTYPE == np.float16 else torch.float32).cpu().numpy()
+        b_last_np = b_last.to(torch.float16 if cfg.cache.type ==
+                              np.float16 else torch.float32).cpu().numpy()
 
         # Write into memmap
         mm[cur:cur + bsz, :, :] = b_last_np
@@ -239,7 +227,7 @@ def main():
         with open(progress_path, "w", encoding="utf-8") as f:
             json.dump({"next_index": cur}, f)
 
-        if cur % (BATCH_SIZE * 50) == 0 or cur >= n:
+        if cur % (cfg.cache.batch_size * 50) == 0 or cur >= n:
             print(f"[INFO] wrote {cur}/{n}")
 
         if cur >= n:
@@ -248,6 +236,15 @@ def main():
     print("[DONE] extraction complete.")
     print(f"[DONE] memmap: {out_path}")
     print(f"[DONE] meta:   {meta_path}")
+
+    # save labels
+    labels = np.asarray(ds[cfg.dataset.label_col], dtype=np.uint8)
+
+    np.save(out_dir + "/labels.npy", labels)
+
+    print(f"[DONE] saved labels to {out_dir}/labels.npy")
+    print(f"[INFO] shape = {labels.shape}, dtype = {labels.dtype}")
+    print(f"[INFO] unique values = {np.unique(labels)}")
 
 
 if __name__ == "__main__":
