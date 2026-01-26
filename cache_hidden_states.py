@@ -95,6 +95,7 @@ def get_custom_dir(dataset_name, dataset_split, task_name, model_short):
 def main(cfg: DictConfig):
     out_dir = HydraConfig.get().runtime.output_dir
     logging.info(f"Output directory: {out_dir}")
+    save_type = np.float16 if cfg.cache.bf16 else np.float32
 
     # 1) Load dataset
     ds = load_dataset(cfg.dataset.name, split=cfg.dataset.split)
@@ -159,7 +160,7 @@ def main(cfg: DictConfig):
 
     mm = np.memmap(
         out_path,
-        dtype=cfg.cache.type,
+        dtype=save_type,
         mode="r+" if (cfg.cache.resume and os.path.exists(out_path)) else "w+",
         shape=(n, num_states, hidden_size),
     )
@@ -178,13 +179,14 @@ def main(cfg: DictConfig):
                     "num_hidden_layers": num_hidden_layers,
                     "num_states": num_states,
                     "memmap_file": os.path.basename(out_path),
-                    "dtype": str(cfg.cache.type),
+                    "dtype": str(save_type),
                     "shape": [n, num_states, hidden_size],
                 },
                 f,
                 indent=2,
             )
-
+    from IPython import embed
+    embed()
     # Resume bookkeeping
     start_idx = 0
     if cfg.cache.resume and os.path.exists(progress_path):
@@ -230,7 +232,7 @@ def main(cfg: DictConfig):
     # for texts in tqdm(loader_iter, total=(len(loader) - skip_batches if start_idx else len(loader))):
     logging.info(f"n={n} | writing to {out_path}")
     logging.info(
-        f"hidden_size={hidden_size} | num_states={num_states} | dtype={cfg.cache.type}")
+        f"hidden_size={hidden_size} | num_states={num_states} | dtype={save_type}")
     logging.info(f"starting at index {cur}")
 
     while True:
@@ -285,8 +287,8 @@ def main(cfg: DictConfig):
         hidden_embed = torch.stack(hidden_embed, dim=1)  # (B,33,D)
 
         # Move to CPU + cast for storage
-        hidden_embed_np = hidden_embed.to(torch.float16 if cfg.cache.type ==
-                                          np.float16 else torch.float32).cpu().numpy()
+        hidden_embed_np = hidden_embed.to(
+            torch.float16 if cfg.cache.bf16 else torch.float32).cpu().numpy()
 
         # Write into memmap
         mm[cur:cur + bsz, :, :] = hidden_embed_np
