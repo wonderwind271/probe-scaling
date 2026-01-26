@@ -329,7 +329,6 @@ def online_mdl_for_layer_tensor(
 
         probe, _ = build_probe(probe_type, d_in=d_in,
                                hidden_sizes=hidden_sizes, num_classes=2)
-        print('online mdl_for_layer_tensor')
 
         best_ce_sum, best_epoch = train_stage_with_early_stop_mdl_tensor(
             probe=probe,
