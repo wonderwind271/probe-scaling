@@ -1,8 +1,7 @@
-model: "meta-llama/Meta-Llama-3.1-8B"
 model_short: 'llama'
 
 dataset: 
-  train: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens
+  train: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens_test
   test: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens_test  
 
 mdl:

@@ -1,7 +1,7 @@
 model: 
   name: "meta-llama/Meta-Llama-3.1-8B"
   short: 'llama'
-  max_length: 128
+  max_length: 128  # somo needs 256
 
 dataset: 
   name: "Seed42Lab/en-ud-train"  # compling/somo, compling/factuality

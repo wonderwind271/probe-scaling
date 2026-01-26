@@ -12,6 +12,15 @@ Goal:
 Storage:
 - Uses numpy memmap so you can write incrementally without holding everything in RAM.
 - Default dtype float16 to save space (~2.7GB for N=10k).
+
+---
+Xiaoxi: add different tasks/datasets.
+- Somo: use the first 15k in training split.
+    dataset.name=compling/somo
+    model.max_length=256
+    dataset.task_name=somo
+
+- factuality: compling/factuality
 """
 
 import os
@@ -26,6 +35,9 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from hydra.core.hydra_config import HydraConfig
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def collate_text(batch: List[Dict], text_col) -> List[str]:
@@ -60,11 +72,13 @@ def main(cfg: DictConfig):
 
     # 1) Load dataset
     ds = load_dataset(cfg.dataset.name, split=cfg.dataset.split)
+    if cfg.dataset.name == "compling/somo" and len(ds) > 15000:
+        shuffled_ds = ds.shuffle(seed=42)
+        ds = shuffled_ds.select(range(15000))
+        logging.info(f"Subsetting Somo to 15k examples.")
     n = len(ds)
-
-    # Optional: if you truly only want ~10k examples
-    # ds = ds.select(range(min(10000, len(ds))))
-    # n = len(ds)
+    logging.info(
+        f'Loaded dataset: {cfg.dataset.name}, split={cfg.dataset.split}, size={n}')
 
     # 2) Tokenizer
     tok = AutoTokenizer.from_pretrained(cfg.model.name, use_fast=True)
@@ -107,6 +121,7 @@ def main(cfg: DictConfig):
     # Create or open memmap
     if (not cfg.cache.resume) and os.path.exists(out_path):
         os.remove(out_path)
+        logging.info(f"Removed existing memmap at {out_path} for fresh start.")
 
     mm = np.memmap(
         out_path,
@@ -142,6 +157,7 @@ def main(cfg: DictConfig):
         try:
             with open(progress_path, "r", encoding="utf-8") as f:
                 start_idx = int(json.load(f).get("next_index", 0))
+            logging.info(f"Resuming from index {start_idx}")
         except Exception:
             start_idx = 0
 
@@ -168,6 +184,8 @@ def main(cfg: DictConfig):
     else:
         loader_iter = iter(loader)
         batch_offset = 0
+    logging.info(
+        f'DataLoader starting at batch offset {batch_offset}.')
 
     # 6) Extract + write
     cur = batch_offset
@@ -176,10 +194,10 @@ def main(cfg: DictConfig):
     # simple tqdm without importing (optional). If you want tqdm:
     # from tqdm.auto import tqdm
     # for texts in tqdm(loader_iter, total=(len(loader) - skip_batches if start_idx else len(loader))):
-    print(f"[INFO] n={n} | writing to {out_path}")
-    print(
-        f"[INFO] hidden_size={hidden_size} | num_states={num_states} | dtype={cfg.cache.type}")
-    print(f"[INFO] starting at index {cur}")
+    logging.info(f"n={n} | writing to {out_path}")
+    logging.info(
+        f"hidden_size={hidden_size} | num_states={num_states} | dtype={cfg.cache.type}")
+    logging.info(f"starting at index {cur}")
 
     while True:
         texts = next(loader_iter, None)
@@ -233,18 +251,18 @@ def main(cfg: DictConfig):
         if cur >= n:
             break
 
-    print("[DONE] extraction complete.")
-    print(f"[DONE] memmap: {out_path}")
-    print(f"[DONE] meta:   {meta_path}")
+    logging.info("extraction complete.")
+    logging.info(f"memmap: {out_path}")
+    logging.info(f"meta:   {meta_path}")
 
     # save labels
     labels = np.asarray(ds[cfg.dataset.label_col], dtype=np.uint8)
 
     np.save(out_dir + "/labels.npy", labels)
 
-    print(f"[DONE] saved labels to {out_dir}/labels.npy")
-    print(f"[INFO] shape = {labels.shape}, dtype = {labels.dtype}")
-    print(f"[INFO] unique values = {np.unique(labels)}")
+    logging.info(f"[DONE] saved labels to {out_dir}/labels.npy")
+    logging.info(f"shape = {labels.shape}, dtype = {labels.dtype}")
+    logging.info(f"unique values = {np.unique(labels)}")
 
 
 if __name__ == "__main__":
