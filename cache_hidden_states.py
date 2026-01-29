@@ -256,7 +256,8 @@ def main(cfg: DictConfig):
                 target_word_id = item['pred_token'] - 1
                 verb_idx = get_verb_token_index(enc, i, target_word_id)
                 if verb_idx is None:
-                    raise ValueError('Could not find verb token index for item:', item)
+                    raise ValueError(
+                        'Could not find verb token index for item:', item)
                 verb_indices.append(verb_idx)
 
             verb_indices = torch.tensor(verb_indices, device=device)  # (B,)
