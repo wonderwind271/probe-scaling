@@ -120,7 +120,7 @@ def main(cfg: DictConfig):
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
 
-    def tokenize_texts(texts: List[str]):
+    def tokenize_texts(texts: List[str]) -> Dict[str, torch.Tensor]:
         return tok(
             texts,
             padding="max_length",
@@ -131,7 +131,13 @@ def main(cfg: DictConfig):
 
     # 3) Model
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModelForCausalLM.from_pretrained(cfg.model.name)
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg.model.name,
+        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+        low_cpu_mem_usage=True,
+        # If you have multiple GPUs and want HF to shard automatically, uncomment:
+        # device_map="auto",
+    )
     model.to(device)
     model.eval()
 
@@ -250,10 +256,7 @@ def main(cfg: DictConfig):
                 target_word_id = item['pred_token'] - 1
                 verb_idx = get_verb_token_index(enc, i, target_word_id)
                 if verb_idx is None:
-                    raise ValueError(
-                        "Could not find verb token index for item "
-                        f"(pred_token={item.get('pred_token')}, max_length={cfg.model.max_length})."
-                    )
+                    raise ValueError('Could not find verb token index for item:', item)
                 verb_indices.append(verb_idx)
 
             verb_indices = torch.tensor(verb_indices, device=device)  # (B,)
