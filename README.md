@@ -2,13 +2,19 @@
 Probe model's scaling behavior and baseline
 
 ## File structure
-- `probe_model.py`: Given the model, define classifier model on the hidden layers
-- `train_probe.py`: Given the model, train the classifier model on the hidden layers (use UD dataset)
-- `train.py`: Use adversary method to train the model so that it can't tell two types of the sentences apart
+- `cache_hidden_states.py`: Cache last-token (or predicate+last) hidden states to disk for cheap probing
+- `mdl_training_cached.py`: Train/eval probes from cached hidden states (no model inference)
+- `probe_model.py`: Probe architectures used by `mdl_training_cached.py`
+- Archived scripts/configs: `archive/` (e.g. `archive/train.py`, `archive/train_probe.py`, `archive/mdl_training.py`)
 
 ## Huggingface Dataset and Models
 - [Seed42Lab/en-ud-train-pair](https://huggingface.co/datasets/Seed42Lab/en-ud-train-pair): dataset for adversary training (can also be used for classifier training)
 - [Seed42Lab/en-ud-test](https://huggingface.co/datasets/Seed42Lab/en-ud-test): test set for classifier accuracy
+
+## Probing workflow
+This repo supports a two-stage workflow:
+1) **Cache hidden states**: `cache_hidden_states.py` (+ `config_cache_hidden.yaml`)
+2) **Train probes from caches**: `mdl_training_cached.py` (+ `config_cached.yaml`)
 
 ## Formula
 ### Fine-tuning Objective
