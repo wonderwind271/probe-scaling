@@ -24,8 +24,7 @@ Xiaoxi: add different tasks/datasets.
 
 import os
 import json
-import re
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -44,46 +43,16 @@ def collate_text(batch: List[Dict], text_col) -> List[str]:
     return [ex[text_col] for ex in batch]
 
 
-_WORD_RE = re.compile(r"\S+")
-
-
-def _word_span_by_index(text: str, word_idx: int) -> Optional[Tuple[int, int]]:
+def get_verb_token_index(batch_encoding, batch_idx, target_word_idx):
     """
-    Return (start, end) char span for the `word_idx`-th whitespace-delimited token.
-    `word_idx` is 0-based.
+    find the last token index corresponding to the target word (predicate) in the original text
     """
-    if word_idx < 0:
-        return None
-    for i, m in enumerate(_WORD_RE.finditer(text)):
-        if i == word_idx:
-            return (m.start(), m.end())
+    w_ids = batch_encoding.word_ids(batch_index=batch_idx)
+
+    for i in range(len(w_ids) - 1, -1, -1):
+        if w_ids[i] == target_word_idx:
+            return i
     return None
-
-
-def get_predicate_token_index(
-    *,
-    text: str,
-    offsets: Sequence[Tuple[int, int]],
-    pred_word_idx: int,
-) -> Optional[int]:
-    """
-    Find the last subtoken index whose offset overlaps the predicate word span.
-    Uses tokenizer-provided `offset_mapping` so it works across Llama/Mistral/Qwen/GPT-NeoX fast tokenizers.
-    """
-    span = _word_span_by_index(text, pred_word_idx)
-    if span is None:
-        return None
-    span_start, span_end = span
-
-    last_tok_idx: Optional[int] = None
-    for tok_idx, (s, e) in enumerate(offsets):
-        # Special/pad tokens typically have (0,0) offsets.
-        if s == e:
-            continue
-        # Any overlap between token span and word span.
-        if s < span_end and e > span_start:
-            last_tok_idx = tok_idx
-    return last_tok_idx
 
 
 def load_hidden_states(dir_path: str):
@@ -151,16 +120,14 @@ def main(cfg: DictConfig):
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
 
-    def tokenize_texts(texts: List[str], *, with_offsets: bool = False):
-        kwargs = dict(
+    def tokenize_texts(texts: List[str]):
+        return tok(
+            texts,
             padding="max_length",
             truncation=True,
             max_length=cfg.model.max_length,
             return_tensors="pt",
         )
-        if with_offsets:
-            kwargs["return_offsets_mapping"] = True
-        return tok(texts, **kwargs)
 
     # 3) Model
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -270,7 +237,7 @@ def main(cfg: DictConfig):
 
         texts = [item[cfg.dataset.text_col] for item in batch_item]
         bsz = len(texts)
-        enc = tokenize_texts(texts, with_offsets=(cfg.dataset.task_name == "factuality"))
+        enc = tokenize_texts(texts)
         input_ids = enc["input_ids"].to(device, non_blocking=True)
         attention_mask = enc["attention_mask"].to(device, non_blocking=True)
 
@@ -281,16 +248,11 @@ def main(cfg: DictConfig):
             for i, item in enumerate(batch_item):
                 assert item['pred_token'] >= 1
                 target_word_id = item['pred_token'] - 1
-                offsets_i = enc["offset_mapping"][i]
-                verb_idx = get_predicate_token_index(
-                    text=texts[i],
-                    offsets=offsets_i,
-                    pred_word_idx=target_word_id,
-                )
+                verb_idx = get_verb_token_index(enc, i, target_word_id)
                 if verb_idx is None:
                     raise ValueError(
-                        "Could not find predicate token index for item "
-                        f"(pred_token={item.get('pred_token')}, max_length={cfg.model.max_length}). "
+                        "Could not find verb token index for item "
+                        f"(pred_token={item.get('pred_token')}, max_length={cfg.model.max_length})."
                     )
                 verb_indices.append(verb_idx)
 
