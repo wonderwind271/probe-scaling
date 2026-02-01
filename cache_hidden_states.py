@@ -82,7 +82,7 @@ def get_custom_dir(dataset_name, dataset_split, task_name, model_short):
         split = 'train'
     elif dataset_name == 'compling/somo':
         split = dataset_split
-    elif dataset_name == 'compling/event_factuality':
+    elif dataset_name in ['compling/event_factuality', 'compling/event_factuality_balanced']:
         split = dataset_split
     else:
         raise ValueError(f'Unknown dataset name: {dataset_name}')
