@@ -1,9 +1,9 @@
-from typing import Dict, Optional, Literal, Union
+from __future__ import annotations
+
+from typing import Dict, Optional, Literal, List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import GPT2LMHeadModel, AutoModelForCausalLM
-from typing import List
 
 PoolType = Literal["last_token", "mean"]
 
@@ -59,6 +59,27 @@ def pool_hidden(h, attention_mask: Optional[torch.Tensor], pool: PoolType):
         raise ValueError(f'{pool} is not supported')
 
 
+def _get_backbone_core(backbone: nn.Module) -> nn.Module:
+    """
+    Return the transformer "core" model that yields hidden_states, regardless of
+    whether `backbone` is a *ForCausalLM wrapper or a base model.
+    Works for common families:
+      - Llama/Mistral/Qwen: `.base_model` / `.model`
+      - GPT-2/GPT-J/GPT-Neo: `.base_model` / `.transformer`
+      - GPT-NeoX (Pythia): `.base_model` / `.gpt_neox`
+    """
+    core = getattr(backbone, "base_model", None)
+    if isinstance(core, nn.Module):
+        return core
+
+    for attr in ("model", "transformer", "gpt_neox", "backbone"):
+        candidate = getattr(backbone, attr, None)
+        if isinstance(candidate, nn.Module):
+            return candidate
+
+    return backbone
+
+
 class FrozenBackboneLayerwiseProber(nn.Module):
     """
     Frozen backbone + layerwise probes.
@@ -102,20 +123,13 @@ class FrozenBackboneLayerwiseProber(nn.Module):
         # Run backbone (usually no_grad to save memory)
         ctx = torch.no_grad() if self.backbone_no_grad else torch.enable_grad()
         with ctx:
-            # LLaMAForCausalLM etc.
-            backbone_core = getattr(self.backbone, "model", None)
-            if backbone_core is None:
-                backbone_core = getattr(
-                    self.backbone, "transformer", None)  # GPT2LMHeadModel
-            if backbone_core is None:
-                # already a base model (e.g., LlamaModel)
-                backbone_core = self.backbone
-
+            backbone_core = _get_backbone_core(self.backbone)
             outputs = backbone_core(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 output_hidden_states=True,
                 return_dict=True,
+                **kwargs,
             )
             # tuple (n_layers+1), each (B,T,D)
             hidden_states = outputs.hidden_states
