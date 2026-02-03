@@ -247,7 +247,15 @@ def main(cfg: DictConfig):
         input_ids = enc["input_ids"].to(device, non_blocking=True)
         attention_mask = enc["attention_mask"].to(device, non_blocking=True)
 
-        last_idx = attention_mask.long().sum(dim=1).clamp_min(1) - 1  # (B,)
+        B, T = attention_mask.shape
+        rev = attention_mask.flip(dims=[1]).long()   
+        last_from_end = rev.argmax(dim=1)            
+        has_token = attention_mask.any(dim=1)
+        last_idx = torch.where(
+            has_token,
+            T - 1 - last_from_end,
+            torch.zeros_like(last_from_end),
+        )
 
         if cfg.dataset.task_name == 'factuality':
             verb_indices = []
