@@ -46,7 +46,7 @@ def _infer_dtype(dtype_str: str) -> np.dtype:
 def get_custom_dir(model_short, task_name, probe_hidden_size: list, seed):
     hidden_size = '-'.join(map(str, probe_hidden_size))
     # time at present
-    cur_time = str(datetime.datetime.now()).split('.')[0]
+    cur_time = str(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")).split('.')[0]
     return f"outputs/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/{cur_time}"
 
 
