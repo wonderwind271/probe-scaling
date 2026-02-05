@@ -5,6 +5,11 @@ __pycache__/
 outputs/
 cache/
 llama31_last_token_hiddens_eval/
+*.png
+*.sh
+slurm/
+*.err
+*.out
 
 # C extensions
 *.so
