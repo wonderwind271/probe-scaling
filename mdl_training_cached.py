@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-
+import datetime
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from hydra.core.hydra_config import HydraConfig
@@ -41,6 +41,13 @@ def _infer_dtype(dtype_str: str) -> np.dtype:
         return np.float32
     raise ValueError(
         f"Unsupported dtype in meta.json: {dtype_str}. Use float16/float32 for numpy memmap.")
+
+
+def get_custom_dir(model_short, task_name, probe_hidden_size: list, seed):
+    hidden_size = '-'.join(map(str, probe_hidden_size))
+    # time at present
+    cur_time = str(datetime.datetime.now()).split('.')[0]
+    return f"outputs/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/{cur_time}"
 
 
 def load_cache_dir(cache_dir: str) -> Tuple[np.memmap, np.ndarray, CacheMeta, Dict]:
@@ -477,9 +484,9 @@ def main(cfg: DictConfig):
         # ---------
         # train_feats[:, layer, :] is a (N,D) view; np.asarray makes it contiguous in RAM
         X_train = torch.from_numpy(np.asarray(
-            train_feats[:, layer, :], dtype=np.float32)).to(device)
+            train_feats[:, layer, :], dtype=np.float32).copy()).to(device)
         X_test = torch.from_numpy(np.asarray(
-            test_feats[:, layer, :], dtype=np.float32)).to(device)
+            test_feats[:, layer, :], dtype=np.float32).copy()).to(device)
 
         # Online MDL (no disk reads now)
         log.info(f"\n[Layer {layer:02d}] Online MDL (tensor-only)...")
@@ -553,4 +560,5 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    OmegaConf.register_new_resolver("calc_path", get_custom_dir)
     main()

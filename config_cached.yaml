@@ -1,8 +1,9 @@
 model_short: 'llama'
+task_name: 'verb-agreement'
 
 dataset: 
-  train: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens_test
-  test: /scratch/chaijy_root/chaijy2/shuyuwu/llama31_last_token_hiddens_test  
+  train: cache/llama/verb-agreement_test/
+  test: cache/llama/verb-agreement_train/
 
 mdl:
   batch_size: 16
@@ -14,4 +15,8 @@ mdl:
   seed: 42
   early_stopping_gap: 3
 
+out_dir: ${calc_path:${model_short}, ${task_name}, ${mdl.probe_hidden_size}, ${mdl.seed}}
 
+hydra:
+  run:
+    dir: ${out_dir}
