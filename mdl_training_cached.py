@@ -148,6 +148,32 @@ def build_probe(probe_type: str, d_in: int, hidden_sizes: List[int], num_classes
     raise ValueError(f"Unknown probe_type: {probe_type}")
 
 
+def make_optimizer(optimizer_name: str, parameters, lr: float) -> torch.optim.Optimizer:
+    """Build and return a torch optimizer for probe training.
+
+    Params:
+        optimizer_name: Optimizer identifier. Supports "adamw", "adam", and "sgd".
+        parameters: Model parameters to optimize.
+        lr: Learning rate for the optimizer.
+
+    Returns:
+        A torch optimizer instance configured with the requested optimizer type.
+
+    Raises:
+        ValueError: If `optimizer_name` is not one of the supported values.
+    """
+    name = str(optimizer_name).lower()
+    if name == "adamw":
+        return torch.optim.AdamW(parameters, lr=lr)
+    if name == "adam":
+        return torch.optim.Adam(parameters, lr=lr)
+    if name == "sgd":
+        return torch.optim.SGD(parameters, lr=lr)
+    raise ValueError(
+        f"Unsupported optimizer '{optimizer_name}'. Expected one of: adamw, adam, sgd."
+    )
+
+
 # -----------------------------
 # Tensor-only helpers (NO disk I/O inside training)
 # -----------------------------
@@ -237,6 +263,7 @@ def train_stage_with_early_stop_mdl_tensor(
     batch_size: int,
     train_epochs: int,
     lr: float,
+    optimizer_name: str,
     early_gap: int,
     mdl_prefix: float,
     layer: int,
@@ -249,7 +276,7 @@ def train_stage_with_early_stop_mdl_tensor(
       best_ce_sum_for_stage, best_epoch
     """
     probe.to(X.device)
-    opt = torch.optim.AdamW(probe.parameters(), lr=lr)
+    opt = make_optimizer(optimizer_name, probe.parameters(), lr)
 
     best_total_mdl = float("inf")
     best_ce_sum = float("inf")
@@ -309,6 +336,7 @@ def online_mdl_for_layer_tensor(
     train_epochs = int(cfg.mdl.train_epochs)
     early_gap = int(cfg.mdl.early_stopping_gap)
     lr = float(cfg.mdl.lr)
+    optimizer_name = str(cfg.mdl.optimizer)
 
     d_in = X.shape[1]
     mdl_sum = 0.0
@@ -346,6 +374,7 @@ def online_mdl_for_layer_tensor(
             batch_size=batch_size,
             train_epochs=train_epochs,
             lr=lr,
+            optimizer_name=optimizer_name,
             early_gap=early_gap,
             mdl_prefix=mdl_sum,
             layer=layer,
@@ -380,12 +409,13 @@ def train_final_probe_full_train_tensor(
     train_epochs = int(cfg.mdl.train_epochs)
     early_gap = int(cfg.mdl.early_stopping_gap)
     lr = float(cfg.mdl.lr)
+    optimizer_name = str(cfg.mdl.optimizer)
 
     d_in = X_train.shape[1]
     probe, _ = build_probe(probe_type, d_in=d_in,
                            hidden_sizes=hidden_sizes, num_classes=2)
     probe.to(X_train.device)
-    opt = torch.optim.AdamW(probe.parameters(), lr=lr)
+    opt = make_optimizer(optimizer_name, probe.parameters(), lr)
 
     all_idx = torch.arange(X_train.size(
         0), device=X_train.device, dtype=torch.long)

@@ -10,6 +10,7 @@ mdl:
   probe_type: "mlp"      # "mlp", "linear", "multilinear"
   # probe_hidden_size: only save hidden size as a list, as the input and output sizes are inferred. Only valid for mlp and multilinear probes. 
   probe_hidden_size: [16]
+  optimizer: "adamw"     # "adamw", "adam", "sgd"
   train_epochs: 10
   lr: 1e-3
   seed: 42
