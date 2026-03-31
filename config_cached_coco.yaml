@@ -1,0 +1,25 @@
+model_short: 'dino'
+task_name: 'car'
+layer: 12  # layer of model
+
+dataset: 
+  neg: /home/xxluo/projects/aip-fredashi/xxluo/myproject/vlm-lens/dino-car-neg
+  pos: /home/xxluo/projects/aip-fredashi/xxluo/myproject/vlm-lens/dino-car-pos
+  test_portion: 0.2
+
+mdl:
+  batch_size: 64
+  probe_type: "mlp"      # "mlp", "linear", "multilinear"
+  # probe_hidden_size: only save hidden size as a list, as the input and output sizes are inferred. Only valid for mlp and multilinear probes. 
+  probe_hidden_size: [16]
+  optimizer: "adamw"     # "adamw", "adam", "sgd"
+  train_epochs: 10
+  lr: 1e-3
+  seed: 42
+  early_stopping_gap: 3
+
+out_dir: ${calc_path:${model_short}, ${task_name}, ${mdl.probe_hidden_size}, ${mdl.seed}}
+
+hydra:
+  run:
+    dir: ${out_dir}
