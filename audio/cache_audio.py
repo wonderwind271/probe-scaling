@@ -17,7 +17,7 @@ from transformers import WhisperModel, WhisperProcessor
 MODEL_NAME = "openai/whisper-base"
 DATASET_NAME = "wonderwind271/speech-dataset"
 SAVE_DIR = "/scratch/chaijy_root/chaijy2/shuyuwu/whisper_hidden_states/train_mean_labeled"
-DTYPE = torch.float16   # save space; change to float32 if you really want full precision
+DTYPE = torch.float16   # save space
 DEVICE = "cuda"
 
 # -----------------------------
@@ -43,7 +43,6 @@ with torch.no_grad():
     for idx, ex in enumerate(tqdm(ds_train, desc="Extracting train hidden states")):
         out_path = save_dir / f"{idx:08d}.pt"
 
-        # Skip if already done
         if out_path.exists():
             continue
 
