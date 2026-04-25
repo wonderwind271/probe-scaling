@@ -1,0 +1,22 @@
+model_short: llama
+task_name: somo
+dataset:
+  train: cache/llama/somo_train/
+  test: cache/llama/somo_test/
+mdl:
+  batch_size: 64
+  probe_type: mlp
+  probe_hidden_size:
+  - 11
+  num_classes: 2
+  init_strategy: gamma_second_zero
+  init_gamma: 1.6
+  optimizer: adamw
+  train_epochs: 10
+  lr: 0.001
+  seed: 42
+  early_stopping_gap: 3
+  split_num: 5
+  split_ratio: 2.0
+out_dir: ${calc_path:${model_short}, ${task_name}, ${mdl.probe_hidden_size}, ${mdl.seed},
+  ${mdl.init_strategy}, ${mdl.init_gamma}, ${mdl.optimizer}}
