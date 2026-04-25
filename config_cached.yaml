@@ -6,17 +6,18 @@ dataset:
   test: cache/llama/verb-agreement_train/
 
 mdl:
-  batch_size: 16
+  batch_size: 64
   probe_type: "mlp"      # "mlp", "linear", "multilinear"
   # probe_hidden_size: only save hidden size as a list, as the input and output sizes are inferred. Only valid for mlp and multilinear probes. 
   probe_hidden_size: [16]
+  init_gamma: null      # set, e.g. 0.5, to use paper init N(0, d_in^{-gamma}); null keeps PyTorch default
   optimizer: "adamw"     # "adamw", "adam", "sgd"
   train_epochs: 10
   lr: 1e-3
   seed: 42
   early_stopping_gap: 3
 
-out_dir: ${calc_path:${model_short}, ${task_name}, ${mdl.probe_hidden_size}, ${mdl.seed}}
+out_dir: ${calc_path:${model_short}, ${task_name}, ${mdl.probe_hidden_size}, ${mdl.seed}, ${mdl.init_gamma}}
 
 hydra:
   run:

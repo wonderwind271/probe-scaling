@@ -1,0 +1,5 @@
+- mdl.probe_hidden_size=[2048]
+- mdl.init_strategy=ntk
+- mdl.optimizer=sgd
+- mdl.lr=0.05
+- mdl.seed=342

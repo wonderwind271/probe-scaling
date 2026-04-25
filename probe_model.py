@@ -5,16 +5,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 PoolType = Literal["last_token", "mean"]
 
 
+def init_linear_with_gamma(linear: nn.Linear, init_gamma: float) -> None:
+    std = float(linear.in_features) ** (-float(init_gamma))
+    nn.init.normal_(linear.weight, mean=0.0, std=std)
+    if linear.bias is not None:
+        nn.init.normal_(linear.bias, mean=0.0, std=std)
+
+
 class MLP(nn.Module):
-    def __init__(self, layer_dim: List[int]):
+    def __init__(self, layer_dim: List[int], init_gamma: Optional[float] = None):
         super().__init__()
         assert len(layer_dim) >= 3, 'MLP must have at least one hidden layer!'
         self.fc = nn.ModuleList()
         for (dim_in, dim_out) in zip(layer_dim, layer_dim[1:]):
             self.fc.append(nn.Linear(dim_in, dim_out))
+        if init_gamma is not None:
+            for fc in self.fc:
+                init_linear_with_gamma(fc, init_gamma)
 
     def forward(self, x):
         for idx, fc in enumerate(self.fc):
@@ -26,13 +37,16 @@ class MLP(nn.Module):
 
 
 class MultiLinear(nn.Module):
-    def __init__(self, layer_dim: List[int]):
+    def __init__(self, layer_dim: List[int], init_gamma: Optional[float] = None):
         super().__init__()
         assert len(
             layer_dim) >= 3, 'MultiLinear must have at least one hidden layer!'
         self.fc = nn.ModuleList()
         for (dim_in, dim_out) in zip(layer_dim, layer_dim[1:]):
             self.fc.append(nn.Linear(dim_in, dim_out))
+        if init_gamma is not None:
+            for fc in self.fc:
+                init_linear_with_gamma(fc, init_gamma)
 
     def forward(self, x):
         for fc in self.fc:

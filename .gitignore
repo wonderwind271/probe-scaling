@@ -10,6 +10,11 @@ llama31_last_token_hiddens_eval/
 slurm/
 *.err
 *.out
+figures/
+archive/
+check_mup.py
+init_exp.md
+
 
 # C extensions
 *.so

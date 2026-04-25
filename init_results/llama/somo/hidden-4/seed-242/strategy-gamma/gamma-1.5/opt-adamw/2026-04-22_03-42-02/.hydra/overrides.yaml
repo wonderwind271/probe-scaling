@@ -1,0 +1,4 @@
+- mdl.probe_hidden_size=[4]
+- mdl.init_strategy=gamma
+- mdl.init_gamma=1.5
+- mdl.seed=242

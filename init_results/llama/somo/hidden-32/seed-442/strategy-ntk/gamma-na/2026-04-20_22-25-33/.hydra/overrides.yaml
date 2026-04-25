@@ -1,0 +1,3 @@
+- mdl.probe_hidden_size=[32]
+- mdl.init_strategy=ntk
+- mdl.seed=442

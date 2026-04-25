@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from probe_model import MLP, MultiLinear
+from probe_model import MLP, MultiLinear, init_linear_with_gamma
 import os
 import json
 import logging
@@ -43,11 +43,11 @@ def _infer_dtype(dtype_str: str) -> np.dtype:
         f"Unsupported dtype in meta.json: {dtype_str}. Use float16/float32 for numpy memmap.")
 
 
-def get_custom_dir(model_short, task_name, probe_hidden_size: list, seed):
+def get_custom_dir(model_short, task_name, probe_hidden_size: list, seed, gamma):
     hidden_size = '-'.join(map(str, probe_hidden_size))
     # time at present
     cur_time = str(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-    return f"outputs/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/{cur_time}"
+    return f"outputs/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/gamma-{gamma}/{cur_time}"
 
 
 def load_cache_dir(cache_dir: str) -> Tuple[np.memmap, np.ndarray, CacheMeta, Dict]:
@@ -133,18 +133,27 @@ def geometric_split_indices(n: int, split_num: int = 5, ratio: float = 2.0, seed
 # -----------------------------
 # Probe builders
 # -----------------------------
-def build_probe(probe_type: str, d_in: int, hidden_sizes: List[int], num_classes: int = 2) -> Tuple[nn.Module, List[int]]:
+def build_probe(
+    probe_type: str,
+    d_in: int,
+    hidden_sizes: List[int],
+    num_classes: int = 2,
+    init_gamma: Optional[float] = None,
+) -> Tuple[nn.Module, List[int]]:
     probe_type = probe_type.lower()
     if probe_type == "linear":
-        return nn.Linear(d_in, num_classes), [d_in, num_classes]
+        probe = nn.Linear(d_in, num_classes)
+        if init_gamma is not None:
+            init_linear_with_gamma(probe, init_gamma)
+        return probe, [d_in, num_classes]
     if probe_type in ("mlp", "multilinear"):
         assert hidden_sizes and len(
             hidden_sizes) > 0, "probe_hidden_size must be non-empty for mlp/multilinear"
         layer_dim = [d_in] + list(hidden_sizes) + [num_classes]
         if probe_type == "mlp":
-            return MLP(layer_dim=layer_dim), layer_dim
+            return MLP(layer_dim=layer_dim, init_gamma=init_gamma), layer_dim
         else:
-            return MultiLinear(layer_dim=layer_dim), layer_dim
+            return MultiLinear(layer_dim=layer_dim, init_gamma=init_gamma), layer_dim
     raise ValueError(f"Unknown probe_type: {probe_type}")
 
 
@@ -337,6 +346,9 @@ def online_mdl_for_layer_tensor(
     early_gap = int(cfg.mdl.early_stopping_gap)
     lr = float(cfg.mdl.lr)
     optimizer_name = str(cfg.mdl.optimizer)
+    init_gamma = cfg.mdl.get("init_gamma", None)
+    if init_gamma is not None:
+        init_gamma = float(init_gamma)
 
     d_in = X.shape[1]
     mdl_sum = 0.0
@@ -363,7 +375,8 @@ def online_mdl_for_layer_tensor(
             encode_idx_np.astype(np.int64)).to(X.device)
 
         probe, _ = build_probe(probe_type, d_in=d_in,
-                               hidden_sizes=hidden_sizes, num_classes=2)
+                               hidden_sizes=hidden_sizes, num_classes=2,
+                               init_gamma=init_gamma)
 
         best_ce_sum, best_epoch = train_stage_with_early_stop_mdl_tensor(
             probe=probe,
@@ -397,9 +410,7 @@ def online_mdl_for_layer_tensor(
 
 def train_final_probe_full_train_tensor(
     X_train: torch.Tensor, y_train: torch.Tensor,
-    cfg: DictConfig,
-    *,
-    layer: int,
+    cfg: DictConfig, *, layer: int,
 ) -> nn.Module:
     '''build a new probe, train on full train set, for accuracy eval'''
     batch_size = int(cfg.mdl.batch_size)
@@ -410,10 +421,14 @@ def train_final_probe_full_train_tensor(
     early_gap = int(cfg.mdl.early_stopping_gap)
     lr = float(cfg.mdl.lr)
     optimizer_name = str(cfg.mdl.optimizer)
+    init_gamma = cfg.mdl.get("init_gamma", None)
+    if init_gamma is not None:
+        init_gamma = float(init_gamma)
 
     d_in = X_train.shape[1]
     probe, _ = build_probe(probe_type, d_in=d_in,
-                           hidden_sizes=hidden_sizes, num_classes=2)
+                           hidden_sizes=hidden_sizes, num_classes=2,
+                           init_gamma=init_gamma)
     probe.to(X_train.device)
     opt = make_optimizer(optimizer_name, probe.parameters(), lr)
 
@@ -575,6 +590,7 @@ def main(cfg: DictConfig):
         "test_loss": test_loss_by_layer,
         "probe_type": str(cfg.mdl.probe_type),
         "probe_hidden_size": list(cfg.mdl.probe_hidden_size) if str(cfg.mdl.probe_type).lower() != "linear" else [],
+        "init_gamma": cfg.mdl.get("init_gamma", None),
         "L": int(L),
         "D": int(D),
     }
