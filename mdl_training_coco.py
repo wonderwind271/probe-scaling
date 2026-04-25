@@ -35,6 +35,7 @@ def load_layer_datasets(
     '''Load one layer of cached positive and negative tensors and split train/test.'''
     positive_path = os.path.join(positive_dir, f'layer_{layer_idx:02d}.pt')
     negative_path = os.path.join(negative_dir, f'layer_{layer_idx:02d}.pt')
+
     positive_tensor = torch.load(positive_path, map_location='cpu').squeeze()
     negative_tensor = torch.load(negative_path, map_location='cpu').squeeze()
     
