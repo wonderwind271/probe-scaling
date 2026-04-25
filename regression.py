@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pickle
 import torch
+from sklearn.decomposition import PCA
 
 
 def load_representation(pos_dir: Path, neg_dir: Path, layer_idx: int, model: str):
@@ -25,8 +26,84 @@ def load_representation(pos_dir: Path, neg_dir: Path, layer_idx: int, model: str
         if pos_cls.ndim == 3 and pos_cls.size(-1) == model_dim[model]:  # (batch_size, seq_len, hidden_size)
             pos_cls = pos_cls[:, 0, :].float().numpy()
             neg_cls = neg_cls[:, 0, :].float().numpy()
+    return pos_cls, neg_cls
+
+
+def stats_representation(pos_cls, neg_cls):
     emb = np.concatenate([pos_cls, neg_cls], axis=0)
     return emb.mean(), emb.var()
+
+
+def pca_representation(pos_cls: np.ndarray, neg_cls: np.ndarray, _n_components: int = 20):
+    emb = np.concatenate([pos_cls, neg_cls], axis=0)
+    pca = PCA(n_components=_n_components, svd_solver='randomized', random_state=42)
+    pca.fit(emb)
+    return float(np.sum(pca.explained_variance_ratio_))
+
+
+def load_test_acc(result_dir) -> dict[tuple[str, str, int], float]:
+    """Average linear-probe test accuracy per (model, task, layer) across seeds.
+
+    Reads results where probe_type == 'linear' (single (d_in, d_out) layer, no hidden size). Dedup key is (model, task, seed); latest timestamp wins.
+
+    Returns: dict mapping (model, task, layer) -> float
+    """
+    acc_records = defaultdict(list)
+    seen = {}
+    for result_file in result_dir.rglob('results.json'):
+        with open(result_file) as f:
+            result = json.load(f)
+        if result['config']['mdl']['probe_type'] != 'linear':
+            continue
+        model = result['config']['model_short']
+        task = result['config']['task_name']
+        seed = int(result['config']['mdl']['seed'])
+        timestamp = result_file.parts[-2]
+        key = (model, task, seed)
+        if key in seen and timestamp <= seen[key]:
+            continue
+        seen[key] = timestamp
+        for layer, acc in result['test_acc'].items():
+            acc_records[(model, task, int(layer))].append(acc)
+    return {k: float(np.mean(v)) for k, v in acc_records.items()}
+
+
+def load_pca_variance(path_ls, emb_path, layers, dataset, n_components=10):
+    """Variance explained by the top-n_components PCs per (model, task, layer).
+    Uses .npy CLS-token cache when available; falls back to .pt files.
+    Returns: dict mapping (model, task, layer) -> float in [0, 1]
+    """
+    pca_var = {}
+    for pos, neg in path_ls:
+        if dataset == 'mscoco':
+            model, task, _ = pos.split('-')
+        elif dataset == 'openimages':
+            model, task, _ = pos.split('/')
+        else:
+            raise ValueError(f'Unknown dataset: {dataset}')
+
+        pos_dir = emb_path / pos
+        neg_dir = emb_path / neg
+
+        for layer in range(layers):
+            pos_npy = pos_dir / f'layer_{layer:02d}_cls.npy'
+            neg_npy = neg_dir / f'layer_{layer:02d}_cls.npy'
+            if pos_npy.exists() and neg_npy.exists():
+                pos_cls = np.load(pos_npy)
+                neg_cls = np.load(neg_npy)
+            else:
+                pos_t = torch.load(pos_dir / f'layer_{layer:02d}.pt', map_location='cpu')
+                neg_t = torch.load(neg_dir / f'layer_{layer:02d}.pt', map_location='cpu')
+                pos_cls = pos_t[:, 0, :].float().numpy()
+                neg_cls = neg_t[:, 0, :].float().numpy()
+                del pos_t, neg_t
+
+            X = np.concatenate([pos_cls, neg_cls], axis=0).astype(np.float32)
+            pca = PCA(n_components=n_components, svd_solver='randomized', random_state=42)
+            pca.fit(X)
+            pca_var[(model, task, layer)] = float(np.sum(pca.explained_variance_ratio_))
+
+    return pca_var
 
 
 def load_results(result_dir, avg_seed=False):
@@ -74,6 +151,7 @@ def load_results(result_dir, avg_seed=False):
 def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log_width=False, avg_seed=False):
     # find the best width
     min_mdl = load_results(results_path, avg_seed=avg_seed)
+    linear_probe = load_test_acc(results_path)
     try:
         with open(f'{dataset}_representation_stats.pkl', 'rb') as f:
             representation_stats = pickle.load(f)
@@ -86,8 +164,11 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
                 model, task, _ = pos.split('/')
             for layer in range(layers):
                 print(f'Loading representation for {model} {task} layer {layer}...')
-                mean, var = load_representation(emb_path / pos, emb_path / neg, layer, model)
-                representation_stats[(model, task, layer)] = (mean, var)
+                pos_cls, neg_cls = load_representation(emb_path / pos, emb_path / neg, layer, model)
+                mean, var = stats_representation(pos_cls, neg_cls)
+                pca = pca_representation(pos_cls, neg_cls, _n_components=20)
+                linear_acc = linear_probe[(model, task, layer)]
+                representation_stats[(model, task, layer)] = (mean, var, pca, linear_acc)
 
         with open(f'{dataset}_representation_stats.pkl', 'wb') as f:
             pickle.dump(representation_stats, f)
@@ -95,8 +176,8 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
     X, label = [], []
     # for mscoco, X = 480: 12 layers, 4 tasks, 5 seeds, 2 models
     for (model, task, *_, layer), width in min_mdl.items():
-        mean, var = representation_stats[(model, task, layer)]
-        X.append([mean, var, layer, model_dim[model]])
+        mean, var, pca, linear_acc = representation_stats[(model, task, layer)]
+        X.append([mean, var, pca, linear_acc, layer])
         if log_width:
             width = np.log(width)
         label.append(width)
@@ -110,7 +191,7 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
     X_const = sm.add_constant(np.array(X, dtype=float))
     reg = sm.OLS(label, X_const, hasconst=True).fit()
     print(reg.params)
-    print(reg.summary(xname=['mean', 'var', 'layer', 'model_d']))
+    print(reg.summary(xname=['mean', 'var', 'pca', 'linear_acc', 'layer']))
 
 
 if __name__ == '__main__':
