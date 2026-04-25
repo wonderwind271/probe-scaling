@@ -15,6 +15,7 @@ archive/
 slurm/
 *.pkl
 plot_*.py
+plots/
 
 # Distribution / packaging
 .Python
