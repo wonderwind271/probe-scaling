@@ -12,6 +12,7 @@ slurm/
 *.out
 figures/
 archive/
+init_results/
 check_mup.py
 init_exp.md
 
