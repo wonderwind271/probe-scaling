@@ -47,7 +47,7 @@ def get_custom_dir(model_short, task_name, probe_hidden_size: list, seed):
     hidden_size = '-'.join(map(str, probe_hidden_size))
     # time at present
     cur_time = str(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-    return f"outputs/mscoco/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/{cur_time}"
+    return f"outputs/openimage/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/{cur_time}"
 
 
 def load_cache_dir(cache_dir: str) -> Tuple[np.memmap, np.ndarray, CacheMeta, Dict]:

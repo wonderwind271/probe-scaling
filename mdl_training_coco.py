@@ -38,13 +38,14 @@ def load_layer_datasets(
 
     positive_tensor = torch.load(positive_path, map_location='cpu').squeeze()
     negative_tensor = torch.load(negative_path, map_location='cpu').squeeze()
-    
-    if flat_patch:
-        positive_tensor = positive_tensor.reshape(positive_tensor.size(0), -1)
-        negative_tensor = negative_tensor.reshape(negative_tensor.size(0), -1)
-    else:
-        positive_tensor = positive_tensor[:, 0, :]
-        negative_tensor = negative_tensor[:, 0, :]
+
+    if positive_tensor.ndim == 3 and negative_tensor.ndim == 3:
+        if flat_patch:
+            positive_tensor = positive_tensor.reshape(positive_tensor.size(0), -1)
+            negative_tensor = negative_tensor.reshape(negative_tensor.size(0), -1)
+        else:
+            positive_tensor = positive_tensor[:, 0, :]
+            negative_tensor = negative_tensor[:, 0, :]
 
     feature_shape = positive_tensor.shape
     num_positive = feature_shape[0]
@@ -52,7 +53,7 @@ def load_layer_datasets(
     num_test = round((num_positive + num_negative) * test_ratio)
 
     features = torch.cat((positive_tensor, negative_tensor), dim=0).float()
-    labels = torch.cat((torch.ones(num_positive, dtype=torch.int64), 
+    labels = torch.cat((torch.ones(num_positive, dtype=torch.int64),
                         torch.zeros(num_negative, dtype=torch.int64)), dim=0)
 
     full_dataset = torch.utils.data.TensorDataset(features, labels)

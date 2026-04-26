@@ -106,6 +106,49 @@ def load_pca_variance(path_ls, emb_path, layers, dataset, n_components=10):
     return pca_var
 
 
+def explore(X: np.ndarray, label: np.ndarray, feature_names: list) -> None:
+    """Exploratory diagnostics: correlation matrix, partial correlations,
+    and pairwise residual analysis after partialling out each feature.
+    """
+    from sklearn.linear_model import LinearRegression as LR
+
+    X = np.array(X, dtype=float)
+    label = np.array(label, dtype=float)
+    n = len(feature_names)
+
+    # 1. Full correlation matrix (features + label)
+    data = np.column_stack([X, label])
+    names = feature_names + ['label']
+    corr = np.corrcoef(data.T)
+    print('\n=== Correlation matrix ===')
+    print(f'{"":>14}' + ''.join(f'{nm:>14}' for nm in names))
+    for i, nm in enumerate(names):
+        print(f'{nm:>14}' + ''.join(f'{corr[i, j]:>14.3f}' for j in range(len(names))))
+
+    # 2. Partial correlations: feature j vs label, controlling for all other features
+    print('\n=== Partial correlations with label (others partialled out) ===')
+    for j, name in enumerate(feature_names):
+        others = [k for k in range(n) if k != j]
+        X_others = X[:, others]
+        feat_resid = X[:, j] - LR().fit(X_others, X[:, j]).predict(X_others)
+        label_resid = label - LR().fit(X_others, label).predict(X_others)
+        pc = np.corrcoef(feat_resid, label_resid)[0, 1]
+        print(f'  partial_corr({name:>12}, label | rest) = {pc:+.4f}')
+
+    # 3. For each pair (feat, control), partial out control from feat and from label
+    print('\n=== Residual correlations after partialling out one control ===')
+    for ctrl_name in feature_names:
+        ctrl_idx = feature_names.index(ctrl_name)
+        ctrl_col = X[:, ctrl_idx].reshape(-1, 1)
+        label_resid = label - LR().fit(ctrl_col, label).predict(ctrl_col)
+        for j, name in enumerate(feature_names):
+            if j == ctrl_idx:
+                continue
+            feat_resid = X[:, j] - LR().fit(ctrl_col, X[:, j]).predict(ctrl_col)
+            r = np.corrcoef(feat_resid, label_resid)[0, 1]
+            print(f'  corr({name:>12} | {ctrl_name}, label | {ctrl_name}) = {r:+.4f}')
+
+
 def load_results(result_dir, avg_seed=False):
     # load all `results.json` files under result_dir
     results = defaultdict(lambda: defaultdict(dict))
@@ -155,7 +198,7 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
     try:
         with open(f'{dataset}_representation_stats.pkl', 'rb') as f:
             representation_stats = pickle.load(f)
-    except:
+    except (FileNotFoundError, Exception):
         representation_stats = {}
         for pos, neg in path_ls:
             if dataset == 'mscoco':
@@ -166,6 +209,7 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
                 print(f'Loading representation for {model} {task} layer {layer}...')
                 pos_cls, neg_cls = load_representation(emb_path / pos, emb_path / neg, layer, model)
                 mean, var = stats_representation(pos_cls, neg_cls)
+                print(f'Finish loading representation for {model} {task} layer {layer}')
                 pca = pca_representation(pos_cls, neg_cls, _n_components=20)
                 linear_acc = linear_probe[(model, task, layer)]
                 representation_stats[(model, task, layer)] = (mean, var, pca, linear_acc)
@@ -177,11 +221,11 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
     # for mscoco, X = 480: 12 layers, 4 tasks, 5 seeds, 2 models
     for (model, task, *_, layer), width in min_mdl.items():
         mean, var, pca, linear_acc = representation_stats[(model, task, layer)]
-        X.append([mean, var, pca, linear_acc, layer])
+        X.append([pca, linear_acc, layer])
+        # X.append([layer])
         if log_width:
             width = np.log(width)
         label.append(width)
-
     reg = LinearRegression().fit(X, label)
     print('R2: ', reg.score(X, label))
     print('Coefficients: ', reg.coef_)
@@ -191,7 +235,10 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
     X_const = sm.add_constant(np.array(X, dtype=float))
     reg = sm.OLS(label, X_const, hasconst=True).fit()
     print(reg.params)
-    print(reg.summary(xname=['mean', 'var', 'pca', 'linear_acc', 'layer']))
+    print(reg.summary(xname=['const', 'pca', 'linear_acc', 'layer']))
+    # print(reg.summary(xname=['const', 'layer']))
+
+    explore(np.array(X), np.array(label), ['pca', 'linear_acc', 'layer'])
 
 
 if __name__ == '__main__':
