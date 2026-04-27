@@ -17,6 +17,7 @@ slurm/
 plot_*.py
 plots/
 *.png
+!plot_mdl_decompose.py
 
 # Distribution / packaging
 .Python
