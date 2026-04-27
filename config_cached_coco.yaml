@@ -3,6 +3,7 @@ task_name: 'car'
 layer: 12  # layer of model
 
 dataset: 
+  name: 'mscoco' # 'mscoco', 'openimage'
   neg: /home/xxluo/projects/aip-fredashi/xxluo/myproject/vlm-lens/dino-car-neg
   pos: /home/xxluo/projects/aip-fredashi/xxluo/myproject/vlm-lens/dino-car-pos
   test_portion: 0.2
@@ -18,7 +19,7 @@ mdl:
   seed: 42
   early_stopping_gap: 3
 
-out_dir: ${calc_path:${model_short}, ${task_name}, ${mdl.probe_hidden_size}, ${mdl.seed}}
+out_dir: ${calc_path:${model_short}, ${dataset.name}, ${task_name}, ${mdl.probe_hidden_size}, ${mdl.seed}}
 
 hydra:
   run:

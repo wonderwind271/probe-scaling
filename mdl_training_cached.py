@@ -43,11 +43,11 @@ def _infer_dtype(dtype_str: str) -> np.dtype:
         f"Unsupported dtype in meta.json: {dtype_str}. Use float16/float32 for numpy memmap.")
 
 
-def get_custom_dir(model_short, task_name, probe_hidden_size: list, seed):
+def get_custom_dir(model_short, dataset_name, task_name, probe_hidden_size: list, seed):
     hidden_size = '-'.join(map(str, probe_hidden_size))
     # time at present
     cur_time = str(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-    return f"outputs/openimage/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/{cur_time}"
+    return f"outputs/{dataset_name}/{model_short}/{task_name}/hidden-{hidden_size}/seed-{seed}/{cur_time}"
 
 
 def load_cache_dir(cache_dir: str) -> Tuple[np.memmap, np.ndarray, CacheMeta, Dict]:

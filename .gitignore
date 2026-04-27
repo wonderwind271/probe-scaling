@@ -16,6 +16,7 @@ slurm/
 *.pkl
 plot_*.py
 plots/
+*.png
 
 # Distribution / packaging
 .Python

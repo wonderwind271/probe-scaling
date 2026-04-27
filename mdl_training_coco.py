@@ -301,7 +301,7 @@ def train_final_probe(
     layer_idx: int,
     input_dim: int,
     device: torch.device,
-) -> nn.Module:
+) -> Tuple[nn.Module, float]:
     '''Train a final probe on the full training set for one layer.'''
     batch_size = int(cfg.mdl.batch_size)
     probe_type = str(cfg.mdl.probe_type)
@@ -364,7 +364,7 @@ def train_final_probe(
     if best_state is not None:
         probe.load_state_dict(best_state)
         probe.to(device)
-    return probe
+    return probe, best_loss
 
 
 @hydra.main(version_base=None, config_path='.', config_name='config_cached_coco')
@@ -389,6 +389,7 @@ def main(cfg: DictConfig):
     stop_epochs_by_layer: Dict[int, List[int]] = {}
     test_acc_by_layer: Dict[int, float] = {}
     test_loss_by_layer: Dict[int, float] = {}
+    train_loss_by_layer: Dict[int, float] = {}
     split_sizes = None
     feature_dim = None
 
@@ -438,7 +439,7 @@ def main(cfg: DictConfig):
         )
 
         log.info(f'[Layer {layer_idx:02d}] Final train + test eval...')
-        final_probe = train_final_probe(
+        final_probe, best_loss = train_final_probe(
             train_dataset,
             cfg,
             layer_idx=layer_idx,
@@ -457,7 +458,7 @@ def main(cfg: DictConfig):
             f'[Layer {layer_idx:02d}] test_acc={test_acc_by_layer[layer_idx]:.4f} '
             f'test_loss={test_loss_by_layer[layer_idx]:.4f}',
         )
-
+        train_loss_by_layer[layer_idx] = float(best_loss)
         del train_dataset, test_dataset, final_probe
         if device.type == 'cuda':
             torch.cuda.empty_cache()
@@ -478,6 +479,7 @@ def main(cfg: DictConfig):
         'stopping_epochs_per_stage': stop_epochs_by_layer,
         'test_acc': test_acc_by_layer,
         'test_loss': test_loss_by_layer,
+        'train_loss': train_loss_by_layer,
         'probe_type': str(cfg.mdl.probe_type),
         'probe_hidden_size': (
             list(cfg.mdl.probe_hidden_size)
