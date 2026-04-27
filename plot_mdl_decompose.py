@@ -38,12 +38,14 @@ COLORS = {
 SEEDS = [42, 142, 242, 342, 442]
 
 
-# ── data loading ──────────────────────────────────────────────────────────────
-
 def load_results(result_dir: Path, filter_epochs: Optional[int] = None) -> list[dict]:
-    """Return list of flat record dicts from all results.json under result_dir."""
-    records = []
-    seen: dict = {}   # (model, dataset, task, hidden, seed) -> latest timestamp
+    """Load results, keeping the highest train_epochs available per setting.
+
+    For each (model, dataset, task, hidden, seed): if multiple epoch counts exist (e.g. 30 and 60), only the largest is kept. Within the same epoch count, the latest timestamp wins.
+    filter_epochs: if set, skip records whose train_epochs != this value.
+    """
+    # best[(model, dataset, task, hidden, seed)] = (max_epochs, latest_ts, record_dict)
+    best: dict = {}
 
     for rfile in sorted(result_dir.rglob('results.json')):
         with open(rfile) as fh:
@@ -54,6 +56,8 @@ def load_results(result_dir: Path, filter_epochs: Optional[int] = None) -> list[
 
         if mdl_cfg.get('probe_type', 'mlp') != 'mlp':
             continue
+        if 'train_loss' not in r:
+            continue
 
         hidden = int(mdl_cfg['probe_hidden_size'][0])
         seed = int(mdl_cfg['seed'])
@@ -61,93 +65,117 @@ def load_results(result_dir: Path, filter_epochs: Optional[int] = None) -> list[
         task = str(cfg.get('task_name', ''))
         dataset = str(cfg.get('dataset', {}).get('name', '') or
                       cfg.get('dataset_name', ''))
-        epochs = int(mdl_cfg.get('train_epochs', 10))
+        epochs = int(mdl_cfg['train_epochs'])
 
         if filter_epochs is not None and epochs != filter_epochs:
-            continue
-        if 'train_loss' not in r:
             continue
 
         ts = rfile.parts[-2]
         key = (model, dataset, task, hidden, seed)
-        if key in seen and ts <= seen[key]:
-            continue
-        seen[key] = ts
+
+        prev = best.get(key)
+        if prev is not None:
+            prev_ep, prev_ts, _ = prev
+            # keep whichever has more epochs; break ties by timestamp
+            if ts <= prev_ts:
+                continue
 
         splits = r.get('splits', [0])
         mdl_layers = {int(k): float(v) for k, v in r['mdl_sum_ce'].items()}
         train_layers = {int(k): float(v) for k, v in r['train_loss'].items()}
 
-        records.append({
-            'model':   model,
-            'dataset': dataset,
-            'task':    task,
-            'hidden':  hidden,
-            'seed':    seed,
-            'epochs':  epochs,
-            'n_first': splits[0],   # splits[0]: for uniform code term
-            'n_train': sum(splits),
-            'mdl':     mdl_layers,
-            'train_loss':   train_layers,  # layer -> avg CE/sample in nats (final probe, all data)
+        best[key] = (epochs, ts, {
+            'model':      model,
+            'dataset':    dataset,
+            'task':       task,
+            'hidden':     hidden,
+            'seed':       seed,
+            'epochs':     epochs,
+            'n_first':    splits[0],
+            'n_train':    sum(splits),
+            'mdl':        mdl_layers,
+            'train_loss': train_layers,
         })
-    return records
+
+    return [rec for _, _, rec in best.values()]
 
 
 def _build_bucket(records: list[dict]) -> dict:
-    """Flatten records into bucket[(model, dataset, task, hidden, layer)] -> list of seed values."""
-    bucket: dict = defaultdict(list)
+    """Flatten records into bucket[(model, dataset, task, hidden, seed, layer)] -> single value."""
+    bucket: dict = {}
     for rec in records:
-        uniform = rec['n_first'] * np.log(2)   # K=2, natural log base
+        uniform = rec['n_first'] * np.log(2)
         for layer in sorted(rec['mdl'].keys()):
             if layer not in rec['train_loss']:
                 continue
-            key = (rec['model'], rec['dataset'], rec['task'], rec['hidden'], layer)
+            key = (rec['model'], rec['dataset'], rec['task'],
+                   rec['hidden'], rec['seed'], layer)
             mdl_val = rec['mdl'][layer] + uniform
             data_val = rec['train_loss'][layer] * rec['n_train']
-            bucket[key].append({'mdl': mdl_val, 'model_cl': mdl_val - data_val, 'data_cl': data_val})
+            bucket[key] = {'mdl': mdl_val, 'model_cl': mdl_val - data_val, 'data_cl': data_val}
     return bucket
 
 
 def _stats(vals: list[dict]) -> dict:
+    """Compute mean ± stderr (over seeds) for each metric."""
+    n = len(vals)
     leaf = {}
-    for metric, key_m, key_s in [('mdl', 'mdl_mean', 'mdl_std'),
-                                 ('model_cl', 'model_cl_mean', 'model_cl_std'),
-                                 ('data_cl', 'data_cl_mean',  'data_cl_std')]:
-        arr = [v[metric] for v in vals]
+    for metric, key_m, key_se in [
+        ('mdl', 'mdl_mean', 'mdl_stderr'),
+        ('model_cl', 'model_cl_mean', 'model_cl_stderr'),
+            ('data_cl', 'data_cl_mean', 'data_cl_stderr')]:
+        arr = np.array([v[metric] for v in vals])
         leaf[key_m] = float(np.mean(arr))
-        leaf[key_s] = float(np.std(arr))
+        leaf[key_se] = float(np.std(arr) / np.sqrt(n)) if n > 1 else 0.0
     return leaf
 
 
 def aggregate_per_layer(bucket: dict) -> dict:
-    """Average bucket over seeds, keeping the layer dimension.
+    """Average over seeds per (model, dataset, task, hidden, layer).
 
     Returns nested dict:
-        result[model][dataset][task][hidden][layer] = {mdl_mean, mdl_std, ...}
+        result[model][dataset][task][hidden][layer] = {mdl_mean, mdl_stderr, ...}
     """
+    # group values by (model, dataset, task, hidden, layer) across seeds
+    by_layer: dict = defaultdict(list)
+    for (model, dataset, task, hidden, _seed, layer), val in bucket.items():
+        by_layer[(model, dataset, task, hidden, layer)].append(val)
+
     result: dict = defaultdict(
         lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(dict))))
-    for (model, dataset, task, hidden, layer), vals in bucket.items():
-        assert len(vals) == 5
-        # average over seeds
+    for (model, dataset, task, hidden, layer), vals in by_layer.items():
         result[model][dataset][task][hidden][layer] = _stats(vals)
     return result
 
 
 def aggregate(bucket: dict) -> dict:
-    """Average bucket over seeds AND layers.
+    """Average over layers and seeds; stderr is over seeds only.
+
+    For each (model, dataset, task, hidden, seed) the layer values are averaged
+    first, giving one scalar per seed.  stderr is then computed over those
+    n_seeds scalars.
 
     Returns nested dict:
-        result[model][dataset][task][hidden] = {mdl_mean, mdl_std, ...}
+        result[model][dataset][task][hidden] = {mdl_mean, mdl_stderr, ...}
     """
-    # collapse layer into the value list
-    flat: dict = defaultdict(list)
-    for (model, dataset, task, hidden, _layer), vals in bucket.items():
-        flat[(model, dataset, task, hidden)].extend(vals)
+    # step 1: per-seed layer average
+    # seed_avgs[(model, dataset, task, hidden, seed)] = list of layer values
+    seed_vals: dict = defaultdict(list)
+    for (model, dataset, task, hidden, seed, _layer), val in bucket.items():
+        seed_vals[(model, dataset, task, hidden, seed)].append(val)
 
+    # step 2: average each seed over layers → one dict per seed
+    per_seed: dict = defaultdict(list)
+    for (model, dataset, task, hidden, seed), vals in seed_vals.items():
+        mean_val = {m: float(np.mean([v[m] for v in vals]))
+                    for m in ('mdl', 'model_cl', 'data_cl')}
+        per_seed[(model, dataset, task, hidden)].append(mean_val)
+
+    # step 3: stderr over seeds
     result: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
-    for (model, dataset, task, hidden), vals in flat.items():
+    for (model, dataset, task, hidden), vals in per_seed.items():
         result[model][dataset][task][hidden] = _stats(vals)
+
     return result
 
 
@@ -167,7 +195,6 @@ def plot_decompose_per_layer(agg_pl: dict, out_dir: Path) -> None:
                 cell = agg_pl.get(model, {}).get(dataset, {}).get(task, {})
                 if not cell:
                     continue
-
                 hiddens = sorted(cell.keys())
                 layers = sorted({l for h in hiddens for l in cell[h]})
                 if not layers:
@@ -188,8 +215,8 @@ def plot_decompose_per_layer(agg_pl: dict, out_dir: Path) -> None:
                     dcl_m = np.array([cell[h][layer]['data_cl_mean'] if layer in cell[h] else np.nan for h in hiddens])
                     mcl_m = np.array([cell[h][layer]['model_cl_mean'] if layer in cell[h] else np.nan for h in hiddens])
                     mdl_m = np.array([cell[h][layer]['mdl_mean'] if layer in cell[h] else np.nan for h in hiddens])
-                    dcl_s = np.array([cell[h][layer]['data_cl_std'] if layer in cell[h] else 0.0 for h in hiddens])
-                    mcl_s = np.array([cell[h][layer]['model_cl_std'] if layer in cell[h] else 0.0 for h in hiddens])
+                    dcl_s = np.array([cell[h][layer]['data_cl_stderr'] if layer in cell[h] else 0.0 for h in hiddens])
+                    mcl_s = np.array([cell[h][layer]['model_cl_stderr'] if layer in cell[h] else 0.0 for h in hiddens])
 
                     ax.bar(x_idx, dcl_m, bar_w, color=COLORS['data'],  alpha=0.8, yerr=dcl_s, capsize=2, error_kw={'elinewidth': 0.8},
                            label='Data CL')
@@ -213,11 +240,11 @@ def plot_decompose_per_layer(agg_pl: dict, out_dir: Path) -> None:
                     axes[li // n_cols][li % n_cols].set_visible(False)
 
                 fig.suptitle(
-                    f'{model.upper()} | {dataset} | {task} — MDL decomposition per layer\n'
-                    '(mean ± std over seeds; bars = data CL + model CL)',
+                    f'{model.upper()} | {dataset} | {task} : MDL decomposition per layer\n'
+                    '(mean ± stderrerr over seeds; bars = data CL + model CL)',
                     fontsize=10)
                 plt.tight_layout()
-                out = out_dir / f'mdl_per_layer_{model}_{dataset}_{task}.png'
+                out = out_dir / f'mdl_per_layer_{model}_{dataset}_{task}_60.png'
                 plt.savefig(out, dpi=160, bbox_inches='tight')
                 plt.close()
                 print(f'Saved {out}')
@@ -258,7 +285,7 @@ def plot_mdl_per_layer(agg_pl: dict, out_dir: Path) -> None:
                     ys = np.array([cell[h][layer]['mdl_mean']
                                    if h in cell and layer in cell[h] else np.nan
                                    for h in hiddens])
-                    ers = np.array([cell[h][layer]['mdl_std']
+                    ers = np.array([cell[h][layer]['mdl_stderr']
                                     if h in cell and layer in cell[h] else 0.0
                                     for h in hiddens])
                     color = MODEL_COLORS.get(model, 'gray')
@@ -277,9 +304,9 @@ def plot_mdl_per_layer(agg_pl: dict, out_dir: Path) -> None:
             for li in range(len(layers), n_rows * n_cols):
                 axes[li // n_cols][li % n_cols].set_visible(False)
 
-            fig.suptitle(f'{dataset} | {task} — MDL vs width per layer\n(mean ± std over seeds)', fontsize=10)
+            fig.suptitle(f'{dataset} | {task} : MDL vs width per layer\n(mean ± stderrerr over seeds)', fontsize=10)
             plt.tight_layout()
-            out = out_dir / f'mdl_per_layer_{dataset}_{task}.png'
+            out = out_dir / f'mdl_per_layer_{dataset}_{task}_60.png'
             plt.savefig(out, dpi=160, bbox_inches='tight')
             plt.close()
             print(f'Saved {out}')
@@ -310,18 +337,17 @@ def plot_decompose(agg: dict, out_dir: Path) -> None:
             for ax, model in zip(axes, models):
                 cell = agg.get(model, {}).get(dataset, {}).get(task, {})
                 if not cell:
-                    ax.set_title(f'{model.upper()} — no data')
+                    ax.set_title(f'{model.upper()} : no data')
                     continue
 
                 hiddens = sorted(cell.keys())
                 x_idx = np.arange(len(hiddens))
                 bar_w = 0.6
-
                 dcl_m = np.array([cell[h]['data_cl_mean'] for h in hiddens])
                 mcl_m = np.array([cell[h]['model_cl_mean'] for h in hiddens])
                 mdl_m = np.array([cell[h]['mdl_mean'] for h in hiddens])
-                dcl_s = np.array([cell[h]['data_cl_std'] for h in hiddens])
-                mcl_s = np.array([cell[h]['model_cl_std'] for h in hiddens])
+                dcl_s = np.array([cell[h]['data_cl_stderr'] for h in hiddens])
+                mcl_s = np.array([cell[h]['model_cl_stderr'] for h in hiddens])
 
                 # stacked bars: data codelength (bottom) + model codelength (top)
                 ax.bar(x_idx, dcl_m, bar_w,
@@ -348,11 +374,11 @@ def plot_decompose(agg: dict, out_dir: Path) -> None:
                 ax.grid(True, axis='y', linestyle='--', alpha=0.35)
 
             fig.suptitle(
-                f'MDL decomposition — {dataset} / {task}\n'
-                '(mean ± std across seeds; averaged over layers)',
+                f'MDL decomposition : {dataset} / {task}\n'
+                '(mean ± stderrerr across seeds; averaged over layers)',
                 fontsize=11)
             plt.tight_layout()
-            out = out_dir / f'mdl_decompose_{dataset}_{task}.png'
+            out = out_dir / f'mdl_decompose_{dataset}_{task}_60.png'
             plt.savefig(out, dpi=160, bbox_inches='tight')
             plt.close()
             print(f'Saved {out}')
@@ -380,7 +406,7 @@ def plot_summary_grid(agg: dict, out_dir: Path) -> None:
                 hiddens = sorted(cell.keys())
                 xs = np.log2(np.array(hiddens, dtype=float))
                 ys = [cell[h]['mdl_mean'] for h in hiddens]
-                ers = [cell[h]['mdl_std'] for h in hiddens]
+                ers = [cell[h]['mdl_stderr'] for h in hiddens]
                 _errbar(ax, xs, ys, ers,
                         colors.get(model, 'gray'), model.upper())
             ax.set_xticks(np.log2(sorted({h for m in agg
@@ -396,7 +422,7 @@ def plot_summary_grid(agg: dict, out_dir: Path) -> None:
             ax.legend(fontsize=8)
             ax.grid(True, linestyle='--', alpha=0.35)
 
-    fig.suptitle('Total MDL vs hidden size — CLIP vs DINO', fontsize=12)
+    fig.suptitle('Total MDL vs hidden size : CLIP vs DINO', fontsize=12)
     plt.tight_layout()
     out = out_dir / 'mdl_summary_grid.png'
     plt.savefig(out, dpi=160, bbox_inches='tight')
@@ -406,15 +432,10 @@ def plot_summary_grid(agg: dict, out_dir: Path) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--mscoco-dir',    type=Path,
-                   default=Path('outputs/mscoco'))
-    p.add_argument('--openimage-dir', type=Path,
-                   default=Path('outputs/openimage'))
-    p.add_argument('--epochs', type=int, default=None,
-                   help='Filter to runs with this train_epochs value. '
-                        'Default: include all.')
-    p.add_argument('--out-dir', type=Path,
-                   default=Path('plots/decompose'))
+    p.add_argument('--mscoco-dir', type=Path, default=Path('outputs/mscoco'))
+    p.add_argument('--openimage-dir', type=Path, default=Path('outputs/openimage'))
+    p.add_argument('--epochs', type=int, default=None, help='Filter to runs with this train_epochs value. Default: include all.')
+    p.add_argument('--out-dir', type=Path, default=Path('plots/decompose'))
     return p.parse_args()
 
 
@@ -466,8 +487,8 @@ def main():
     print('\nPlotting per-layer decomposition...')
     plot_decompose_per_layer(agg_pl, args.out_dir)
 
-    print('\nPlotting summary grid...')
-    plot_summary_grid(agg, args.out_dir)
+    # print('\nPlotting summary grid...')
+    # plot_summary_grid(agg, args.out_dir)
 
     print('\nDone.')
 
