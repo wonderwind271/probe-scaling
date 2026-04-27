@@ -9,7 +9,7 @@ dataset:
   text_col: "text"
   label_col: "label"
   num_workers: 1
-  task_name: "verb-agreement"  # verb-agreement, somo, event_factuality
+  task_name: "verb-agreement"  # verb-agreement, somo, factuality
 
 cache:
   batch_size: 64
