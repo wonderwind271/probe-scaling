@@ -18,6 +18,7 @@ plot_*.py
 plots/
 *.png
 !plot_mdl_decompose.py
+plot_init_heatmap.py
 
 # Distribution / packaging
 .Python

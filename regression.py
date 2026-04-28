@@ -221,7 +221,7 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
     # for mscoco, X = 480: 12 layers, 4 tasks, 5 seeds, 2 models
     for (model, task, *_, layer), width in min_mdl.items():
         mean, var, pca, linear_acc = representation_stats[(model, task, layer)]
-        X.append([pca, linear_acc, layer])
+        X.append([layer])
         # X.append([layer])
         if log_width:
             width = np.log(width)
@@ -235,10 +235,10 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
     X_const = sm.add_constant(np.array(X, dtype=float))
     reg = sm.OLS(label, X_const, hasconst=True).fit()
     print(reg.params)
-    print(reg.summary(xname=['const', 'pca', 'linear_acc', 'layer']))
-    # print(reg.summary(xname=['const', 'layer']))
+    # print(reg.summary(xname=['const', 'linear_acc', 'layer']))
+    print(reg.summary(xname=['const', 'layer']))
 
-    explore(np.array(X), np.array(label), ['pca', 'linear_acc', 'layer'])
+    # explore(np.array(X), np.array(label), ['layer'])
 
 
 if __name__ == '__main__':
