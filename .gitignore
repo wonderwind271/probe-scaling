@@ -8,6 +8,7 @@ __pycache__/
 # *.csv
 # *.conllu
 outputs/
+muP_results/
 archive/
 *.err
 *.out
