@@ -1,0 +1,5 @@
+- mdl.probe_hidden_size=[1024]
+- mdl.init_strategy=mup
+- mdl.seed=242
+- mdl.train_epochs=20
+- mdl.lr=0.0001220703125

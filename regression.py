@@ -149,6 +149,37 @@ def explore(X: np.ndarray, label: np.ndarray, feature_names: list) -> None:
             print(f'  corr({name:>12} | {ctrl_name}, label | {ctrl_name}) = {r:+.4f}')
 
 
+def lrt_test(X: np.ndarray, label: np.ndarray, feature_names: list) -> None:
+    """Likelihood-ratio test for each feature in a linear regression.
+
+    For each feature j, fits the full OLS model and a reduced model with feature j
+    dropped, then computes λ = -2*(ℓ_reduced − ℓ_full) ~ χ²(df=1).
+    """
+    from scipy.stats import chi2
+
+    X = np.array(X, dtype=float)
+    label = np.array(label, dtype=float)
+
+    X_full = sm.add_constant(X)
+    full_model = sm.OLS(label, X_full).fit()
+    ll_full = full_model.llf
+
+    print('\n=== Likelihood-Ratio Test (drop one feature at a time) ===')
+    print(f'  Full model  log-likelihood: {ll_full:.4f}')
+    print(f'  Full model  R²:             {full_model.rsquared:.4f}')
+    print(f'{"Feature":>14}  {"ll_reduced":>12}  {"LRT stat":>10}  {"p-value":>10}  {"sig":>4}')
+    print('-' * 50)
+    for j, name in enumerate(feature_names):
+        kept = [k for k in range(X.shape[1]) if k != j]
+        X_red = sm.add_constant(X[:, kept], has_constant='add')
+        red_model = sm.OLS(label, X_red).fit()
+        ll_red = red_model.llf
+        lrt_stat = -2 * (ll_red - ll_full)  # always ≥ 0
+        p_val = chi2.sf(lrt_stat, df=1)
+        sig = '***' if p_val < 0.001 else ('**' if p_val < 0.01 else ('*' if p_val < 0.05 else ''))
+        print(f'  {name:>12}  {ll_red:>12.4f}  {lrt_stat:>10.4f}  {p_val:>10.4f}  {sig:>4}')
+
+
 def load_results(result_dir, avg_seed=False):
     # load all `results.json` files under result_dir
     results = defaultdict(lambda: defaultdict(dict))
@@ -191,7 +222,7 @@ def load_results(result_dir, avg_seed=False):
     return min_mdl
 
 
-def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log_width=False, avg_seed=False):
+def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log_width=False, avg_seed=False, normalize=False):
     # find the best width
     min_mdl = load_results(results_path, avg_seed=avg_seed)
     linear_probe = load_test_acc(results_path)
@@ -218,27 +249,30 @@ def regression(path_ls, emb_path, results_path, dataset='mscoco', layers=12, log
             pickle.dump(representation_stats, f)
 
     X, label = [], []
+    # feature_names = ['mean', 'var', 'pca', 'layer', 'linear_acc']
+    feature_names = ['layer']
     # for mscoco, X = 480: 12 layers, 4 tasks, 5 seeds, 2 models
     for (model, task, *_, layer), width in min_mdl.items():
         mean, var, pca, linear_acc = representation_stats[(model, task, layer)]
+        # X.append([mean, var, pca, layer, linear_acc])
         X.append([layer])
-        # X.append([layer])
         if log_width:
             width = np.log(width)
         label.append(width)
-    reg = LinearRegression().fit(X, label)
-    print('R2: ', reg.score(X, label))
-    print('Coefficients: ', reg.coef_)
-    print('Intercept: ', reg.intercept_)
 
-    # X: (intercept, mean, var, layer_idx, model_d)
-    X_const = sm.add_constant(np.array(X, dtype=float))
-    reg = sm.OLS(label, X_const, hasconst=True).fit()
-    print(reg.params)
-    # print(reg.summary(xname=['const', 'linear_acc', 'layer']))
-    print(reg.summary(xname=['const', 'layer']))
+    X_arr = np.array(X, dtype=float)
+    if normalize:
+        col_mean = X_arr.mean(axis=0)
+        col_std = X_arr.std(axis=0)
+        col_std[col_std == 0] = 1.0   # avoid division by zero for constant columns
+        X_arr = (X_arr - col_mean) / col_std
+        print('Normalization applied (mean=0, std=1 per feature)')
 
-    # explore(np.array(X), np.array(label), ['layer'])
+    X_const = sm.add_constant(X_arr)
+    reg = sm.OLS(label, X_const).fit()
+    print(reg.summary(xname=['const'] + feature_names))
+
+    lrt_test(X_arr, np.array(label), feature_names)
 
 
 if __name__ == '__main__':
@@ -247,6 +281,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='mscoco', choices=['mscoco', 'openimages'], help='Dataset to use for regression.')
     parser.add_argument('--log_width', action='store_true', help='Whether to log-transform the width before regression.')
     parser.add_argument('--avg_seed', action='store_true', help='Whether to average results across seeds.')
+    parser.add_argument('--normalize', action='store_true', help='Normalize each feature to mean=0 std=1 before regression.')
     args = parser.parse_args()
 
     # mscoco
@@ -263,6 +298,6 @@ if __name__ == '__main__':
         results_path = Path('outputs/openimage/')
 
     model_dim = {'clip': 768, 'dino': 768}
-    regression(path_ls, emb_path, results_path, dataset=args.dataset, log_width=args.log_width, avg_seed=args.avg_seed)
+    regression(path_ls, emb_path, results_path, dataset=args.dataset, log_width=args.log_width, avg_seed=args.avg_seed, normalize=args.normalize)
 
     # regression(path_ls, emb_path, results_path, dataset=args.dataset, log_width=True, avg_seed=True)
